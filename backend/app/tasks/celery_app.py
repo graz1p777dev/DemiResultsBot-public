@@ -16,6 +16,10 @@ celery_app.conf.update(
     # beat сверяется с app.timezone, а enable_utc влияет только на то, в каком
     # виде метки времени едут внутри сообщений брокера.
     beat_schedule={
+        "resume-outgoing": {
+            "task": "resume_outgoing",
+            "schedule": crontab(minute="*"),
+        },
         "resume-night-inbox": {
             "task": "resume_night_inbox",
             "schedule": crontab(minute="*/5"),

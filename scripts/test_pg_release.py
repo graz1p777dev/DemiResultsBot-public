@@ -331,6 +331,117 @@ class PGReleaseTest(unittest.TestCase):
             self.assertIsNone(db.scalar(select(Setting).where(Setting.key == f"night_resume:{lead_id}")))
         self.assert_unlocked(lead_id)
 
+    def test_old_session_refuses_transaction_after_epoch_replacement(self):
+        from app.services import pipeline_fence
+        lead_id, _ = self.seed()
+        with self.sessions() as old, self.sessions() as successor:
+            guard = pipeline_fence.install(old, lead_id)
+            try:
+                newer_guard = pipeline_fence.install(successor, lead_id)
+                pipeline_fence.remove(successor, newer_guard)
+                with self.assertRaises(pipeline_fence.StalePipelineFence):
+                    old.scalar(select(Lead).where(Lead.id == lead_id))
+                old.rollback()
+            finally:
+                pipeline_fence.remove(old, guard)
+
+    def test_training_finalization_under_contention(self):
+        lead_id, trigger = self.seed()
+        pipeline.process_lead_buffer(lead_id, trigger)
+        with self.sessions() as db:
+            identifier = db.scalar(select(ApprovalRequest.id).where(ApprovalRequest.lead_id == lead_id))
+        barrier = threading.Barrier(8, timeout=8)
+        def finalize():
+            with self.sessions() as db:
+                approval = db.get(ApprovalRequest, identifier)
+                barrier.wait()
+                pipeline.save_training_example(db, approval)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(lambda _: finalize(), range(8)))
+        with self.sessions() as db:
+            self.assertEqual(len(db.scalars(select(TrainingExample).where(TrainingExample.approval_request_id == identifier)).all()), 1)
+
+    def test_atomic_session_pop_under_contention(self):
+        with self.sessions() as db:
+            pipeline.set_edit_session(db, "qa-pop", 123)
+        barrier = threading.Barrier(8, timeout=8)
+        def consume():
+            barrier.wait()
+            with self.sessions() as db:
+                return pipeline.pop_edit_session(db, "qa-pop")
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: consume(), range(8)))
+        self.assertEqual(results.count(123), 1)
+        self.assertEqual(results.count(None), 7)
+
+    def test_competing_outbox_recovery_claims_only_once(self):
+        lead_id, trigger = self.seed()
+        pipeline.process_lead_buffer(lead_id, trigger)
+        class Crash(BaseException):
+            pass
+        with self.sessions() as db:
+            approval_id = db.scalar(select(ApprovalRequest.id).where(ApprovalRequest.lead_id == lead_id))
+            with patch.object(pipeline, "send_approved_reply", side_effect=Crash):
+                with self.assertRaises(Crash):
+                    pipeline.approve_request(db, approval_id, "111")
+        barrier = threading.Barrier(4, timeout=8)
+        def recover():
+            barrier.wait()
+            pipeline.resume_outgoing()
+        before = len(self.sent)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda _: recover(), range(4)))
+        self.assertEqual(len(self.sent) - before, 1)
+        with self.sessions() as db:
+            self.assertEqual(db.get(ApprovalRequest, approval_id).status, "sent")
+
+    def test_bounded_eight_worker_generation_load(self):
+        work = [self.seed() for _ in range(24)]
+        started = time.monotonic()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(pipeline.process_lead_buffer, lead_id, trigger) for lead_id, trigger in work]
+            for future in futures:
+                future.result(timeout=30)
+        with self.sessions() as db:
+            for lead_id, _ in work:
+                self.assertEqual(len(db.scalars(select(ApprovalRequest).where(ApprovalRequest.lead_id == lead_id)).all()), 1)
+                self.assertTrue(db.scalar(select(MessageBuffer).where(MessageBuffer.lead_id == lead_id)).processed)
+        self.assertEqual(len(self.cards), 24)
+        self.assertEqual(len(self.sent), 0)
+        print("Bounded load: 24 leads / 8 threads, %.2fs; pool size=8 max_overflow=8" % (time.monotonic() - started), flush=True)
+
+    def test_killed_advisory_connection_is_fenced(self):
+        lead_id, trigger = self.seed()
+        entered, release = threading.Event(), threading.Event()
+        calls = 0
+        def slow_generate(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                entered.set()
+                if not release.wait(8):
+                    raise AssertionError("fence barrier timed out")
+            return self.result("QA fenced draft")
+        pipeline.generate_reply.side_effect = slow_generate
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(pipeline.process_lead_buffer, lead_id, trigger)
+            try:
+                self.assertTrue(entered.wait(5))
+                with self.engine.connect() as db:
+                    pid = db.scalar(text("SELECT pid FROM pg_locks WHERE locktype='advisory' AND classid=:ns AND objid=:lead AND granted"), {"ns": NAMESPACE, "lead": lead_id})
+                    self.assertIsNotNone(pid)
+                    self.assertTrue(db.scalar(text("SELECT pg_terminate_backend(:pid)"), {"pid": pid}))
+                second = pool.submit(pipeline.process_lead_buffer, lead_id, trigger)
+            finally:
+                release.set()
+            first.result(timeout=15)
+            second.result(timeout=15)
+        with self.sessions() as db:
+            self.assertEqual(len(db.scalars(select(ApprovalRequest).where(ApprovalRequest.lead_id == lead_id)).all()), 1)
+        self.assertEqual(len(self.cards), 1)
+        self.assertEqual(self.sent, [])
+        self.assert_unlocked(lead_id)
+
 
 if __name__ == "__main__":
     # Hard wall-clock bound even if a driver/thread hangs; container is disposable.

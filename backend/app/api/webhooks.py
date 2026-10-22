@@ -15,6 +15,7 @@ from app.schemas.amocrm import parse_amocrm_webhook
 from app.services import amocrm, crm_notify, telegram
 from app.services.openai_service import transcribe_voice
 from app.services.message_policy import service_message_reason
+from app.services.telegram_updates import deduplicate
 from app.services.repository import upsert_incoming
 from app.tasks.pipeline import (
     apply_ai_edited_reply,
@@ -222,6 +223,7 @@ async def openai_webhook(request: Request, db: Session = Depends(get_db)) -> dic
 
 
 @router.post("/telegram/{secret}")
+@deduplicate
 async def telegram_webhook(secret: str, request: Request, db: Session = Depends(get_db)) -> dict:
     expected_secret = settings.telegram_webhook_secret
     if not expected_secret or not secrets.compare_digest(secret.encode(), expected_secret.encode()):
@@ -579,6 +581,7 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
                 "Предложи 1-2 ближайших свободных времени если они известны. "
                 "Ответ короткий, тёплый, уважительный, на языке клиента."
             )
+            snapshot = approval.edited_reply
             try:
                 result = ai_edit_reply(
                     approval.edited_reply or approval.ai_reply,
@@ -588,6 +591,7 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
                 changed = db.execute(sql_update(ApprovalRequest).where(
                     ApprovalRequest.id == approval_id,
                     ApprovalRequest.status.in_(("pending", "edited")),
+                    ApprovalRequest.edited_reply == snapshot,
                 ).values(edited_reply=str(result.content), status="edited",
                          manager_telegram_id=manager_id))
                 if changed.rowcount != 1:
@@ -739,7 +743,8 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
             if prompt_mid:
                 telegram.delete_message(manager_id, prompt_mid)
             approval = db.get(ApprovalRequest, translate_approval_id)
-            if approval:
+            if approval and approval.status in {"pending", "edited"}:
+                snapshot = approval.edited_reply
                 from app.services.openai_service import translate_reply
                 from app.tasks.pipeline import save_ai_usage
                 reply_text = approval.edited_reply or approval.ai_reply or ""
@@ -750,9 +755,10 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
                         text,
                     )
                     save_ai_usage(db, approval.lead_id, result)
-                    approval.edited_reply = str(result.content)
-                    db.commit()
-                    db.refresh(approval)
+                    approval = apply_edited_reply(db, translate_approval_id, manager_id,
+                        str(result.content), expected_reply=snapshot, check_snapshot=True)
+                    if approval is None:
+                        return {"ok": False, "error": "approval_changed"}
                     lead = db.get(Lead, approval.lead_id)
                     if lead:
                         has_templates = bool(_load_templates(db))

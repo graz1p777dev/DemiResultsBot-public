@@ -240,12 +240,12 @@ def test_actual_telegram_webhook_authorization_and_approve_replay(flow):
         approval_id = db.scalar(select(ApprovalRequest.id))
     def callback(actor="111", secret="local-telegram-secret"):
         return flow.client.post(f"/webhooks/telegram/{secret}", json={
-            "callback_query": {"id": "test-callback", "from": {"id": int(actor)},
+            "update_id": 1, "callback_query": {"id": "test-callback", "from": {"id": int(actor)},
                 "message": {"chat": {"id": 111}}, "data": f"approve:{approval_id}"},
         })
     assert callback(secret="wrong").status_code == 401
     assert callback(actor="999").json()["error"] == "unauthorized_manager"
     assert not flow.sent
     assert callback().json()["ok"] is True
-    assert callback().json()["ok"] is False
+    assert callback().json()["duplicate"] is True
     assert len(flow.sent) == 1

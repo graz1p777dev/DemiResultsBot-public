@@ -1,0 +1,61 @@
+name: demi-offline-qa
+services:
+  postgres:
+    image: ${DEMI_QA_POSTGRES_IMAGE:-postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777}
+    network_mode: none
+    command: ["postgres", "-c", "listen_addresses=", "-c", "max_connections=40"]
+    environment:
+      POSTGRES_DB: green_release_qa
+      POSTGRES_HOST_AUTH_METHOD: trust
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - qa_socket:/var/run/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "/var/run/postgresql", "-U", "postgres", "-d", "green_release_qa"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    mem_limit: 256m
+    cpus: 1
+    pids_limit: 128
+  redis:
+    image: ${DEMI_QA_REDIS_IMAGE:-redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99}
+    network_mode: none
+    user: "0:0"
+    entrypoint: ["redis-server"]
+    command: ["--port", "0", "--unixsocket", "/var/run/postgresql/redis-qa.sock", "--unixsocketperm", "777", "--save", "", "--appendonly", "no"]
+    volumes:
+      - qa_socket:/var/run/postgresql
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "-s", "/var/run/postgresql/redis-qa.sock", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    mem_limit: 64m
+    cpus: 0.5
+    pids_limit: 64
+  tests:
+    build:
+      context: ..
+      dockerfile: qa/Dockerfile
+      args:
+        PYTHON_IMAGE: ${DEMI_QA_PYTHON_IMAGE:-python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70}
+    network_mode: none
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - qa_socket:/var/run/postgresql:ro
+    tmpfs:
+      - /tmp:size=128m
+    mem_limit: 512m
+    cpus: 1
+    pids_limit: 128
+volumes:
+  qa_socket:

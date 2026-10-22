@@ -9,3 +9,5 @@ def no_network(monkeypatch):
         raise AssertionError("Unmocked network traffic forbidden in local checks")
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    monkeypatch.setattr(socket, "gethostbyname", blocked)

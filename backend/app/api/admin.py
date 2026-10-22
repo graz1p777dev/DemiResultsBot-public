@@ -86,6 +86,45 @@ def whatsapp_status(body: WhatsAppStatus, db: Session = Depends(get_db)) -> dict
     return {"ok": True, "matched": True}
 
 
+@router.get("/delivery-recovery")
+def delivery_recovery(db: Session = Depends(get_db)) -> dict:
+    """Read-only diagnostics: no customer text, contact information or secrets."""
+    messages = db.scalars(select(Message).where(
+        Message.direction == "outgoing",
+        or_(Message.raw_payload["outbox"]["state"].as_string().in_(("ready", "sending", "uncertain")),
+            Message.status.in_(("pending_dispatch", "dispatching", "send_failed", "approved"))),
+    ).order_by(Message.id).limit(100)).all()
+    outgoing = []
+    for message in messages:
+        raw = message.raw_payload or {}
+        intent = raw.get("outbox") or {}
+        if intent.get("state") == "completed":
+            continue
+        outgoing.append({"row_id": message.id, "status": message.status,
+            "state": intent.get("state", "legacy_requires_review"),
+            "approval_id": intent.get("approval_id"),
+            "active_part": intent.get("active_part"),
+            "accepted_parts": len(raw.get("green_message_ids") or []),
+            "expected_parts": len(intent.get("parts") or []) or raw.get("green_expected_parts"),
+            "started_at": intent.get("started_at")})
+    receipts = db.scalars(select(Setting).where(
+        Setting.key.like("telegram_update:%"),
+        ~Setting.value.contains('"state": "completed"'),
+    ).order_by(Setting.updated_at.desc()).limit(100)).all()
+    import json
+    updates = []
+    for row in receipts:
+        try:
+            receipt = json.loads(row.value)
+        except (ValueError, TypeError):
+            continue
+        if receipt.get("state") != "completed":
+            updates.append({"update_id": row.key.split(":", 1)[1],
+                "state": receipt.get("state"), "received_at": receipt.get("received_at")})
+    return {"outgoing": outgoing, "telegram_updates": updates, "limit": 100,
+        "policy": "Never resend sending/uncertain/legacy attempts without provider reconciliation"}
+
+
 class DealStageMove(BaseModel):
     pipeline_id: int
     status_id: int

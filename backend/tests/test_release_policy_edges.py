@@ -130,7 +130,7 @@ def test_consult_cannot_reopen_card_closed_during_ai(flow, monkeypatch, terminal
 
     monkeypatch.setattr(openai_service, "ai_edit_reply", Mock(side_effect=close_during_ai))
     result = flow.client.post("/webhooks/telegram/local-telegram-secret", json={
-        "callback_query": {"id": "consult-race", "from": {"id": 111},
+        "update_id": 1, "callback_query": {"id": "consult-race", "from": {"id": 111},
                            "message": {"chat": {"id": 111}}, "data": f"consult:{approval_id}"},
     })
     assert result.json()["ok"] is False
@@ -150,7 +150,7 @@ def test_consult_edits_pending_without_sending_and_rejects_terminal_replay(flow,
         approval_id = db.scalar(select(ApprovalRequest.id))
     edit = Mock(return_value=AIResult(content="Предлагаем консультацию", model="deterministic", purpose="test"))
     monkeypatch.setattr(openai_service, "ai_edit_reply", edit)
-    payload = {"callback_query": {"id": "consult", "from": {"id": 111},
+    payload = {"update_id": 2, "callback_query": {"id": "consult", "from": {"id": 111},
                "message": {"chat": {"id": 111}}, "data": f"consult:{approval_id}"}}
     assert flow.client.post("/webhooks/telegram/local-telegram-secret", json=payload).json()["ok"]
     with flow.sessions() as db:
@@ -158,6 +158,6 @@ def test_consult_edits_pending_without_sending_and_rejects_terminal_replay(flow,
         assert approval.status == "edited"
         assert approval.edited_reply == "Предлагаем консультацию"
         assert pipeline.reject_request(db, approval_id, "111", "Не подходит")
-    assert not flow.client.post("/webhooks/telegram/local-telegram-secret", json=payload).json()["ok"]
+    assert flow.client.post("/webhooks/telegram/local-telegram-secret", json=payload).json()["duplicate"]
     assert edit.call_count == 1
     assert flow.sent == []

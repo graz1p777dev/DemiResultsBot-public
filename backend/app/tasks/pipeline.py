@@ -10,7 +10,7 @@ from tenacity import RetryError
 
 _log = logging.getLogger(__name__)
 
-from sqlalchemy import select, text, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
@@ -30,7 +30,7 @@ from app.models.entities import (
     Setting,
     TrainingExample,
 )
-from app.services import amocrm, crm_notify, google_sheets, telegram
+from app.services import amocrm, crm_notify, google_sheets, telegram, outbox, pipeline_fence
 from app.services.openai_service import AIResult, ai_edit_reply, classify_sales_intent, detect_and_translate, detect_language, extract_fields, generate_purchase_template, generate_reply, strip_voice_marker, summarize_dialogue, verify_reply
 from app.services.message_policy import is_plus_only_message, is_service_message
 from app.services.outgoing import message_delay_seconds, split_outgoing_messages
@@ -635,6 +635,7 @@ def merge_client_memory(db, lead: Lead, extracted: dict, all_messages: list) -> 
 def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
     db = SessionLocal()
     lock_connection = None
+    fence_guard = None
     try:
         if db.get_bind().dialect.name == "postgresql":
             # Session advisory lock survives every pipeline commit. Detach so
@@ -647,6 +648,7 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
                 text("SELECT pg_advisory_lock(:namespace, :lead_id)"),
                 {"namespace": 0x44454D49, "lead_id": lead_pk},
             )
+            fence_guard = pipeline_fence.install(db, lead_pk)
         lead = db.get(Lead, lead_pk)
         if not lead or not lead.ai_enabled:
             return
@@ -1162,6 +1164,10 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
 
         _mark_buffers_processed(db, buffers)
         send_approved_reply(db, lead, conversation_id, triggering_message_id, reply, extracted)
+    except pipeline_fence.StalePipelineFence:
+        db.rollback()
+        # A successor owns recovery; this worker must not write a marker or send.
+        return
     except Exception:
         db.rollback()
         # Keep failed utility/model work discoverable after Celery retries end.
@@ -1178,6 +1184,7 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
                     db.rollback()
         raise
     finally:
+        pipeline_fence.remove(db, fence_guard)
         try:
             db.close()
         finally:
@@ -1194,32 +1201,23 @@ def send_approved_reply(
     extracted: dict | None,
     approval: ApprovalRequest | None = None,
 ) -> bool:
-    reply_parts = split_outgoing_messages(reply)
-    stored_reply = "\n\n".join(reply_parts)
-    assistant_message = db.scalar(
-        select(Message).where(
-            Message.lead_id == lead.id,
-            Message.message_id == f"ai:{triggering_message_id}",
-        )
-    )
-    if assistant_message:
-        return assistant_message.status in {"sent", "queued", "delivered", "read"}
-    else:
-        assistant_message = Message(
-            conversation_id=conversation_id,
-            lead_id=lead.id,
-            message_id=f"ai:{triggering_message_id}",
-            role="assistant",
-            direction="outgoing",
-            text=stored_reply,
-            status="approved",
-        )
-        db.add(assistant_message)
     try:
+        assistant_message = outbox.reserve(db, lead.id, conversation_id,
+            triggering_message_id, reply, approval.id if approval else None, extracted)
         db.commit()
-    except IntegrityError:
+    except (IntegrityError, ValueError):
         db.rollback()
         return False
+    if outbox.complete(assistant_message):
+        if approval and approval.status == "approved":
+            approval.status = "sent"
+            db.commit()
+        return True
+    if not outbox.claim(db, assistant_message):
+        return False
+    # Use the immutable approved snapshot, never a fresh caller-supplied reply.
+    reply_parts = assistant_message.raw_payload["outbox"]["parts"]
+    stored_reply = assistant_message.text
 
     # Тестовый лид: ответ уже лежит в messages, значит и лаборатория, и история
     # чата его покажут. В amoCRM он не уходит — этого клиента там не существует.
@@ -1235,6 +1233,7 @@ def send_approved_reply(
             {"text": stored_reply, "parts": len(reply_parts)},
         )
         db.commit()
+        outbox.checkpoint(db, assistant_message, "completed")
         if extracted:
             update_integrations_after_approval(db, lead, extracted)
         return True
@@ -1245,13 +1244,16 @@ def send_approved_reply(
             for index, part in enumerate(reply_parts):
                 if index:
                     time.sleep(message_delay_seconds(part))
+                outbox.checkpoint(db, assistant_message, "sending", active_part=index)
                 responses.append(_send_green_whatsapp_message(lead.chat_id or "", part))
                 # Persist each provider id before the next delay, so an early
                 # delivery webhook can already find this message.
-                db.refresh(assistant_message)
-                assistant_message.status = "queued"
+                db.refresh(assistant_message, with_for_update=True)
+                if assistant_message.status not in {"sent", "delivered", "read", "failed"}:
+                    assistant_message.status = "queued"
                 assistant_message.raw_payload = {**(assistant_message.raw_payload or {}), "provider": "green_api", "green_expected_parts": len(reply_parts), "green_message_ids": [item["messageId"] for item in responses]}
                 db.commit()
+            outbox.checkpoint(db, assistant_message, "completed", active_part=None)
             if approval:
                 approval.status = "sent"
             log_action(
@@ -1264,7 +1266,9 @@ def send_approved_reply(
             )
             db.commit()
             return True
-        except Exception as exc:
+        except Exception:
+            db.rollback()
+            outbox.checkpoint(db, assistant_message, "uncertain")
             assistant_message.status = "send_failed"
             if approval:
                 approval.status = "failed"
@@ -1274,7 +1278,7 @@ def send_approved_reply(
                 "green_api.send_message",
                 "error",
                 {"text": stored_reply, "parts": len(reply_parts)},
-                error=exc,
+                error="Transport outcome unknown; reconciliation required",
             )
             db.commit()
             return False
@@ -1285,7 +1289,9 @@ def send_approved_reply(
             for index, part in enumerate(reply_parts):
                 if index:
                     time.sleep(message_delay_seconds(part))
+                outbox.checkpoint(db, assistant_message, "sending", active_part=index)
                 responses.append(crm_notify.send_channel_message("instagram", lead.chat_id or "", part))
+            outbox.checkpoint(db, assistant_message, "completed", active_part=None)
             assistant_message.status = "sent"
             if approval:
                 approval.status = "sent"
@@ -1299,7 +1305,9 @@ def send_approved_reply(
             )
             db.commit()
             return True
-        except Exception as exc:
+        except Exception:
+            db.rollback()
+            outbox.checkpoint(db, assistant_message, "uncertain")
             assistant_message.status = "send_failed"
             if approval:
                 approval.status = "failed"
@@ -1309,7 +1317,7 @@ def send_approved_reply(
                 "instagram.send_message",
                 "error",
                 {"parts": len(reply_parts)},
-                error=exc,
+                error="Transport outcome unknown; reconciliation required",
             )
             db.commit()
             return False
@@ -1320,6 +1328,7 @@ def send_approved_reply(
         for index, part in enumerate(reply_parts):
             if index:
                 time.sleep(message_delay_seconds(part))
+            outbox.checkpoint(db, assistant_message, "sending", active_part=index)
             responses.append(
                 amocrm.send_chat_message(
                     session,
@@ -1329,6 +1338,7 @@ def send_approved_reply(
                     part,
                 )
             )
+        outbox.checkpoint(db, assistant_message, "completed", active_part=None)
         assistant_message.status = "sent"
         if approval:
             approval.status = "sent"
@@ -1340,7 +1350,9 @@ def send_approved_reply(
             {"text": stored_reply, "parts": len(reply_parts)},
             {"responses": responses},
         )
-    except Exception as exc:
+    except Exception:
+        db.rollback()
+        outbox.checkpoint(db, assistant_message, "uncertain")
         assistant_message.status = "send_failed"
         if approval:
             approval.status = "failed"
@@ -1350,7 +1362,7 @@ def send_approved_reply(
             "amocrm.send_message",
             "error",
             {"text": stored_reply, "parts": len(reply_parts)},
-            error=exc,
+            error="Transport outcome unknown; reconciliation required",
         )
         db.commit()
         return False
@@ -1359,6 +1371,54 @@ def send_approved_reply(
     if extracted:
         update_integrations_after_approval(db, lead, extracted)
     return True
+
+
+@celery_app.task(name="resume_outgoing")
+def resume_outgoing() -> None:
+    """Recover committed, never-started sends. Sending/uncertain require review."""
+    with SessionLocal() as db:
+        ids = db.scalars(select(Message.id).where(
+            Message.direction == "outgoing", Message.status == "pending_dispatch",
+        ).order_by(Message.id).limit(100)).all()
+        approvals = db.scalars(select(ApprovalRequest.id).where(
+            ApprovalRequest.status == "approved",
+        ).order_by(ApprovalRequest.id).limit(100)).all()
+        for approval_id in approvals:
+            message_id = db.scalar(select(Message.id).where(Message.message_id == f"ai:{approval_id}"))
+            if message_id is not None and message_id not in ids:
+                ids.append(message_id)
+    for identifier in ids:
+        with SessionLocal() as db:
+            try:
+                message = db.get(Message, identifier)
+                raw = (message.raw_payload or {}).get("outbox") or {}
+                if raw.get("state") not in {"ready", "completed"}:
+                    continue
+                if raw.get("state") == "ready" and message.message_id.startswith("ai:night:"):
+                    decision = _reply_hours()
+                    if decision.requires_human_approval or message.message_id.rsplit(":", 1)[-1] != decision.night_key:
+                        outbox.checkpoint(db, message, "cancelled", reason="night_window_expired")
+                        message.status = "cancelled"
+                        db.commit()
+                        continue
+                lead = db.get(Lead, message.lead_id)
+                approval = db.get(ApprovalRequest, raw["approval_id"]) if raw.get("approval_id") else None
+                if not lead or (approval and approval.status != "approved"):
+                    continue
+                ok = send_approved_reply(db, lead, message.conversation_id,
+                    message.message_id.removeprefix("ai:"), message.text,
+                    raw.get("extracted"), approval)
+                if ok and approval:
+                    approval.status = "sent"
+                    db.commit()
+                    clear_claim(db, approval.id)
+                    move_lead_status(db, lead, settings.amocrm_status_on_approve, "approval_accepted")
+                    save_training_example(db, approval)
+                    _update_card_or_notify(approval, lead, "✅ Отправлено",
+                        _load_manager_name(db, approval.manager_telegram_id or ""))
+            except Exception:
+                db.rollback()
+                _log.error("Outbox recovery failed for message row %s", identifier)
 
 
 def update_integrations_after_approval(db, lead: Lead, extracted: dict) -> None:
@@ -1420,26 +1480,57 @@ def _load_manager_name(db, manager_id: str) -> str:
     return f"Telegram ID {manager_id}"
 
 
+SESSION_TTL_SECONDS = 30 * 60
+
+
+def _session_value(setting) -> str | None:
+    if not setting:
+        return None
+    try:
+        envelope = json.loads(setting.value)
+    except (ValueError, TypeError):
+        envelope = None
+    if isinstance(envelope, dict) and "expires_at" in envelope and "value" in envelope:
+        if datetime.now(ZoneInfo("UTC")).timestamp() >= envelope["expires_at"]:
+            return None
+        return envelope["value"]
+    # Legacy sessions have no envelope: bound their lifetime using updated_at.
+    updated = setting.updated_at
+    if updated and (datetime.now(ZoneInfo("UTC")) - updated.replace(tzinfo=updated.tzinfo or ZoneInfo("UTC"))).total_seconds() >= SESSION_TTL_SECONDS:
+        return None
+    return setting.value
+
+
 def _get_session(db, key: str) -> str | None:
-    setting = db.scalar(select(Setting).where(Setting.key == key))
-    return setting.value if setting else None
+    return _session_value(db.scalar(select(Setting).where(Setting.key == key)))
 
 
 def _set_session(db, key: str, value: str) -> None:
-    setting = db.scalar(select(Setting).where(Setting.key == key))
-    if setting:
-        setting.value = value
-    else:
-        db.add(Setting(key=key, value=value, is_secret=False))
-    db.commit()
+    actions = ("edit", "ai_edit", "note", "purchase_answer", "purchase_edit", "reject_reason", "translate")
+    prefix, _, actor = key.rpartition(":")
+    if prefix in {f"telegram_{action}_session" for action in actions}:
+        db.execute(delete(Setting).where(Setting.key.in_([
+            f"telegram_{action}_session:{actor}" for action in actions
+            if prefix != f"telegram_{action}_session"
+        ])))
+    envelope = json.dumps({"value": value,
+        "expires_at": datetime.now(ZoneInfo("UTC")).timestamp() + SESSION_TTL_SECONDS})
+    changed = db.execute(update(Setting).where(Setting.key == key).values(value=envelope))
+    if not changed.rowcount:
+        db.add(Setting(key=key, value=envelope, is_secret=False))
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        db.execute(update(Setting).where(Setting.key == key).values(value=envelope))
+        db.commit()
 
 
 def _pop_session(db, key: str) -> str | None:
-    setting = db.scalar(select(Setting).where(Setting.key == key))
-    if not setting:
-        return None
-    value = setting.value
-    db.delete(setting)
+    # DELETE RETURNING makes consuming a session atomic across workers.
+    row = db.execute(delete(Setting).where(Setting.key == key).returning(
+        Setting.value, Setting.updated_at)).first()
+    value = _session_value(row)
     db.commit()
     return value
 
@@ -1541,12 +1632,14 @@ def apply_ai_edited_reply(db, approval_id: int, manager_id: str, edit_prompt: st
     if not approval or approval.status not in {"pending", "edited"}:
         return None
     lead = db.get(Lead, approval.lead_id)
+    snapshot = approval.edited_reply
     original = approval.edited_reply or approval.ai_reply
     result = ai_edit_reply(original, approval.client_message, edit_prompt)
     new_reply = str(result.content)
     save_ai_usage(db, approval.lead_id, result)
     changed = db.execute(update(ApprovalRequest).where(
         ApprovalRequest.id == approval_id, ApprovalRequest.status.in_(("pending", "edited")),
+        ApprovalRequest.edited_reply == snapshot,
     ).values(edited_reply=new_reply, status="edited", manager_telegram_id=manager_id))
     if changed.rowcount != 1:
         db.rollback()
@@ -1600,6 +1693,15 @@ def approve_request(db, approval_id: int, manager_id: str) -> bool:
         _log.warning("approve blocked: purchase approval %s has no edited reply", approval_id)
         return False
 
+    latest_user_message = db.scalar(
+        select(Message)
+        .where(Message.lead_id == lead.id, Message.role == "user")
+        .order_by(Message.created_at.desc())
+        .limit(1)
+    )
+    if not latest_user_message or not split_outgoing_messages(approval.edited_reply if approval.edited_reply is not None else approval.ai_reply):
+        return False
+
     claimed = db.execute(update(ApprovalRequest).where(
         ApprovalRequest.id == approval_id,
         ApprovalRequest.status.in_(("pending", "edited")),
@@ -1608,27 +1710,21 @@ def approve_request(db, approval_id: int, manager_id: str) -> bool:
     if claimed.rowcount != 1:
         db.rollback()
         return False
-    db.commit()
     db.refresh(approval)
-    log_action(db, lead.id, "telegram.approval_approved", "success", {
-        "approval_id": approval_id, "actor_id": manager_id,
-        "actor_name": _load_manager_name(db, manager_id), "to_status": "approved",
-    })
+    try:
+        db.add(ActionLog(lead_id=lead.id, action="telegram.approval_approved", status="success",
+            request_payload={"approval_id": approval_id, "actor_id": manager_id,
+                "actor_name": _load_manager_name(db, manager_id), "to_status": "approved"}))
+        outbox.reserve(db, lead.id, latest_user_message.conversation_id, str(approval.id),
+            approval.edited_reply if approval.edited_reply is not None else approval.ai_reply,
+            approval.id, approval.extracted_fields)
+        db.commit()
+    except (IntegrityError, ValueError):
+        db.rollback()
+        return False
+    db.refresh(approval)
     clear_claim(db, approval_id)
     db.commit()
-
-    latest_user_message = db.scalar(
-        select(Message)
-        .where(Message.lead_id == lead.id, Message.role == "user")
-        .order_by(Message.created_at.desc())
-        .limit(1)
-    )
-    if not latest_user_message:
-        approval.status = "failed"
-        db.commit()
-        log_action(db, lead.id, "amocrm.send_message", "error", {"approval_id": approval.id}, error="No client message to reply to")
-        _update_card_or_notify(approval, lead, "⚠️ Не отправлено: нет сообщения клиента", _load_manager_name(db, manager_id))
-        return False
 
     ok = send_approved_reply(
         db,
@@ -1641,7 +1737,9 @@ def approve_request(db, approval_id: int, manager_id: str) -> bool:
     )
     manager_name = _load_manager_name(db, manager_id)
     if not ok:
-        _update_card_or_notify(approval, lead, "⚠️ Не отправлено", manager_name, retry=True)
+        _update_card_or_notify(approval, lead,
+            "⏳ Отправка обрабатывается" if approval.status == "approved" else "⚠️ Статус отправки требует проверки; повтор заблокирован",
+            manager_name, retry=False)
         return False
 
     move_lead_status(db, lead, settings.amocrm_status_on_approve, "approval_accepted")
@@ -1651,6 +1749,9 @@ def approve_request(db, approval_id: int, manager_id: str) -> bool:
 
 
 def save_training_example(db, approval: ApprovalRequest) -> None:
+    # Foreground and recovery workers may finalize the same accepted send.
+    # Serialize the check/insert without adding a production schema migration.
+    db.scalar(select(ApprovalRequest.id).where(ApprovalRequest.id == approval.id).with_for_update())
     existing = db.scalar(
         select(TrainingExample).where(TrainingExample.approval_request_id == approval.id)
     )
@@ -1710,6 +1811,9 @@ def reject_request(db, approval_id: int, manager_id: str, reason: str) -> bool:
 
 
 def save_rejected_training_example(db, approval: ApprovalRequest, reason: str) -> None:
+    # Foreground and recovery workers may finalize the same accepted send.
+    # Serialize the check/insert without adding a production schema migration.
+    db.scalar(select(ApprovalRequest.id).where(ApprovalRequest.id == approval.id).with_for_update())
     existing = db.scalar(
         select(TrainingExample).where(TrainingExample.approval_request_id == approval.id)
     )
@@ -1815,13 +1919,17 @@ def save_request(db, approval_id: int, manager_id: str) -> bool:
     return True
 
 
-def apply_edited_reply(db, approval_id: int, manager_id: str, text: str) -> ApprovalRequest | None:
+def apply_edited_reply(db, approval_id: int, manager_id: str, text: str, *,
+    expected_reply: str | None = None, check_snapshot: bool = False) -> ApprovalRequest | None:
     approval = db.get(ApprovalRequest, approval_id)
     if not approval or approval.status not in {"pending", "edited"}:
         return None
-    changed = db.execute(update(ApprovalRequest).where(
+    query = update(ApprovalRequest).where(
         ApprovalRequest.id == approval_id, ApprovalRequest.status.in_(("pending", "edited")),
-    ).values(edited_reply=text, status="edited", manager_telegram_id=manager_id))
+    )
+    if check_snapshot:
+        query = query.where(ApprovalRequest.edited_reply == expected_reply)
+    changed = db.execute(query.values(edited_reply=text, status="edited", manager_telegram_id=manager_id))
     if changed.rowcount != 1:
         db.rollback()
         return None
