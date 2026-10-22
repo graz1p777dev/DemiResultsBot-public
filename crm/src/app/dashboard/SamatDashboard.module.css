@@ -1,0 +1,17 @@
+.workspace { display: flex; height: calc(100dvh - 52px); min-width: 0; }
+.reportSheet { width: 55%; min-width: 0; overflow-y: auto; background: #fff; border-right: 1px solid #e5e7eb; }
+.todaySheet { width: 45%; background: #f5f6f8; border-right: 0; }
+.sectionHeading { padding: 24px 24px 16px; }
+.sectionHeading h2 { margin: 2px 0 0; color: #0c2136; font-size: 18px; font-weight: 700; }
+.sectionHeading p { margin: 0; color: #71828f; font-size: 12px; }
+.sideTools { display: grid; gap: 16px; padding: 16px 24px 24px; }
+:global(.dark) .reportSheet { background: #0b2438; border-color: #29495e; }
+:global(.dark) .todaySheet { background: #061826; }
+:global(.dark) .sectionHeading h2 { color: #e6f4fb; }
+:global(.dark) .sectionHeading p { color: #acc1d0; }
+@media (max-width: 1023px) {
+  .workspace { height: auto; min-height: calc(100dvh - 52px); flex-direction: column; }
+  .reportSheet, .todaySheet { width: 100%; overflow: visible; border-right: 0; }
+  .sectionHeading { padding: 20px 16px 12px; }
+  .sideTools { padding: 16px; }
+}

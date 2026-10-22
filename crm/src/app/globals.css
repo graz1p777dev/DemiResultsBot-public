@@ -1,0 +1,1213 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* === UI/UX Pro Max — Global Enhancements === */
+
+/* Remove number input spinners everywhere */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  margin: 0 !important;
+  display: none !important;
+}
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: textfield !important;
+}
+
+* {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  touch-action: manipulation;
+}
+
+:focus-visible {
+  outline: 2px solid #7c3aed;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Единый быстрый отклик интерактивных элементов без тяжёлых анимаций. */
+button,
+a,
+input,
+textarea,
+select {
+  transition-property:
+    color, background-color, border-color, box-shadow, opacity, transform;
+  transition-duration: 140ms;
+  transition-timing-function: ease-out;
+}
+button:disabled {
+  cursor: wait;
+}
+
+button,
+[role="button"],
+a {
+  cursor: pointer;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, #f3f4f6 25%, #e5e7eb 50%, #f3f4f6 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-in {
+  animation: fadeInUp 0.25s ease-out forwards;
+}
+
+.stagger-children > * {
+  opacity: 0;
+  animation: fadeInUp 0.25s ease-out forwards;
+}
+.stagger-children > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger-children > *:nth-child(2) {
+  animation-delay: 50ms;
+}
+.stagger-children > *:nth-child(3) {
+  animation-delay: 100ms;
+}
+.stagger-children > *:nth-child(4) {
+  animation-delay: 150ms;
+}
+.stagger-children > *:nth-child(5) {
+  animation-delay: 200ms;
+}
+.stagger-children > *:nth-child(6) {
+  animation-delay: 250ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* Скрытая прокрутка — класс для модальных окон */
+.scroll-hidden {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scroll-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+tbody tr {
+  transition: background-color 150ms ease;
+}
+
+.card-hover {
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+.card-hover:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 24px -6px var(--accent-shadow);
+}
+
+/* === Glassmorphism / gradient design system === */
+
+.glass {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.glass-dark {
+  background: rgba(10, 14, 26, 0.55);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.gradient-text {
+  background: linear-gradient(90deg, #7c3aed, #a855f7 55%, #ec4899);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Плавающий градиентный фон — размытые цветные пятна за контентом */
+.gradient-mesh {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: #f4f3fb;
+}
+.gradient-mesh::before,
+.gradient-mesh::after,
+.gradient-mesh .mesh-blob {
+  content: "";
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.35;
+  will-change: transform;
+}
+.gradient-mesh::before {
+  width: 46rem;
+  height: 46rem;
+  top: -18rem;
+  left: -14rem;
+  background: radial-gradient(circle, #a78bfa, transparent 70%);
+  animation: meshFloat 22s ease-in-out infinite;
+}
+.gradient-mesh::after {
+  width: 40rem;
+  height: 40rem;
+  bottom: -16rem;
+  right: -10rem;
+  background: radial-gradient(circle, #f0abfc, transparent 70%);
+  animation: meshFloat 26s ease-in-out infinite reverse;
+}
+.gradient-mesh .mesh-blob {
+  width: 32rem;
+  height: 32rem;
+  top: 30%;
+  left: 45%;
+  background: radial-gradient(circle, #67e8f9, transparent 70%);
+  animation: meshFloat 30s ease-in-out infinite;
+}
+
+@keyframes meshFloat {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(4%, 6%) scale(1.08);
+  }
+  66% {
+    transform: translate(-3%, -4%) scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gradient-mesh::before,
+  .gradient-mesh::after,
+  .gradient-mesh .mesh-blob {
+    animation: none;
+  }
+}
+
+/* === Акцентная тема — переключается в Настройках, хранится в cookie устройства === */
+
+:root {
+  --accent-from: #0c4d6c;
+  --accent-to: #14708f;
+  --accent-shadow: rgba(12, 77, 108, 0.35);
+}
+
+.brand-gradient {
+  background-image: linear-gradient(
+    135deg,
+    var(--accent-from),
+    var(--accent-to)
+  );
+}
+/* Обычная заливка (без градиента) — используется для кнопок, чтобы инлайн-style
+   с историческим backgroundColor (в 40+ файлах) корректно перебивал её через каскад:
+   background-image не перебивается через background-color, а background-color — перебивается. */
+.brand-solid {
+  background-color: var(--accent-from);
+}
+.brand-text {
+  color: var(--accent-from);
+}
+.brand-shadow {
+  box-shadow: 0 8px 20px -6px var(--accent-shadow);
+}
+
+/* Поля авторизации всегда остаются тёмными: общая палитра не должна
+   перекрашивать их в светлый фон и делать введённый текст невидимым. */
+:root:not(.dark) .dr-auth-input {
+  background-color: #071c2f !important;
+  color: #ffffff !important;
+  -webkit-text-fill-color: #ffffff !important;
+  border-color: #315776 !important;
+}
+:root:not(.dark) .dr-auth-input::placeholder {
+  color: #9ab0bf !important;
+  opacity: 1 !important;
+}
+
+:root[data-accent="blue"] {
+  --accent-from: #0c4d6c;
+  --accent-to: #14708f;
+  --accent-shadow: rgba(12, 77, 108, 0.35);
+  --primary: oklch(0.44 0.09 230);
+  --ring: oklch(0.44 0.09 230 / 50%);
+  --sidebar-primary: oklch(0.44 0.09 230);
+  --sidebar-ring: oklch(0.44 0.09 230 / 50%);
+}
+
+:root[data-accent="violet"] {
+  --accent-from: #7c3aed;
+  --accent-to: #9333ea;
+  --accent-shadow: rgba(124, 58, 237, 0.35);
+  --primary: oklch(0.58 0.22 292);
+  --ring: oklch(0.58 0.22 292 / 50%);
+  --sidebar-primary: oklch(0.6 0.22 292);
+  --sidebar-ring: oklch(0.6 0.22 292 / 50%);
+}
+
+:root[data-accent="emerald"] {
+  --accent-from: #059669;
+  --accent-to: #10b981;
+  --accent-shadow: rgba(5, 150, 105, 0.35);
+  --primary: oklch(0.62 0.15 165);
+  --ring: oklch(0.62 0.15 165 / 50%);
+  --sidebar-primary: oklch(0.62 0.15 165);
+  --sidebar-ring: oklch(0.62 0.15 165 / 50%);
+}
+
+:root[data-accent="rose"] {
+  --accent-from: #e11d48;
+  --accent-to: #ec4899;
+  --accent-shadow: rgba(225, 29, 72, 0.35);
+  --primary: oklch(0.58 0.21 10);
+  --ring: oklch(0.58 0.21 10 / 50%);
+  --sidebar-primary: oklch(0.58 0.21 10);
+  --sidebar-ring: oklch(0.58 0.21 10 / 50%);
+}
+
+:root[data-accent="amber"] {
+  --accent-from: #d97706;
+  --accent-to: #f59e0b;
+  --accent-shadow: rgba(217, 119, 6, 0.35);
+  --primary: oklch(0.68 0.16 70);
+  --ring: oklch(0.68 0.16 70 / 50%);
+  --sidebar-primary: oklch(0.68 0.16 70);
+  --sidebar-ring: oklch(0.68 0.16 70 / 50%);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-heading: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --background: oklch(0.96 0.025 230);
+  --foreground: oklch(0.2 0.03 275);
+  --card: oklch(0.94 0.03 225 / 78%);
+  --card-foreground: oklch(0.2 0.03 275);
+  --popover: oklch(0.96 0.025 225 / 94%);
+  --popover-foreground: oklch(0.2 0.03 275);
+  --primary: oklch(0.44 0.09 230);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.9 0.035 225);
+  --secondary-foreground: oklch(0.28 0.05 280);
+  --muted: oklch(0.9 0.03 225);
+  --muted-foreground: oklch(0.5 0.03 280);
+  --accent: oklch(0.88 0.055 225);
+  --accent-foreground: oklch(0.3 0.08 290);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.3 0.03 280 / 10%);
+  --input: oklch(0.3 0.03 280 / 12%);
+  --ring: oklch(0.44 0.09 230 / 50%);
+  --chart-1: oklch(0.6 0.22 292);
+  --chart-2: oklch(0.75 0.14 200);
+  --chart-3: oklch(0.72 0.17 155);
+  --chart-4: oklch(0.78 0.16 80);
+  --chart-5: oklch(0.65 0.22 15);
+  --radius: 0.75rem;
+  --sidebar: oklch(0.2 0.045 265 / 82%);
+  --sidebar-foreground: oklch(0.94 0.01 280);
+  --sidebar-primary: oklch(0.44 0.09 230);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(1 0 0 / 8%);
+  --sidebar-accent-foreground: oklch(0.99 0 0);
+  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-ring: oklch(0.44 0.09 230 / 50%);
+}
+
+.dark {
+  --background: oklch(0.16 0.045 245);
+  --foreground: oklch(0.96 0.01 280);
+  --card: oklch(0.24 0.055 245 / 76%);
+  --card-foreground: oklch(0.96 0.01 280);
+  --popover: oklch(0.2 0.055 245 / 95%);
+  --popover-foreground: oklch(0.96 0.01 280);
+  --primary: oklch(0.58 0.1 230);
+  --primary-foreground: oklch(0.1 0 0);
+  --secondary: oklch(0.28 0.055 245);
+  --secondary-foreground: oklch(0.96 0.01 280);
+  --muted: oklch(0.28 0.055 245);
+  --muted-foreground: oklch(0.72 0.03 280);
+  --accent: oklch(0.32 0.07 240);
+  --accent-foreground: oklch(0.96 0.01 280);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.58 0.1 230 / 50%);
+  --chart-1: oklch(0.68 0.2 292);
+  --chart-2: oklch(0.78 0.13 200);
+  --chart-3: oklch(0.75 0.16 155);
+  --chart-4: oklch(0.8 0.15 80);
+  --chart-5: oklch(0.7 0.2 15);
+  --sidebar: oklch(0.14 0.035 265 / 70%);
+  --sidebar-foreground: oklch(0.96 0.01 280);
+  --sidebar-primary: oklch(0.58 0.1 230);
+  --sidebar-primary-foreground: oklch(0.1 0 0);
+  --sidebar-accent: oklch(1 0 0 / 8%);
+  --sidebar-accent-foreground: oklch(0.99 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.58 0.1 230 / 50%);
+}
+
+/* Синяя ночная тема для страниц со старыми utility-классами. */
+.dark,
+.dark body {
+  background: #061826;
+  color: #e6f4fb;
+  color-scheme: dark;
+}
+
+.dark .gradient-mesh {
+  background:
+    radial-gradient(
+      circle at 18% 10%,
+      rgba(24, 132, 166, 0.26),
+      transparent 34rem
+    ),
+    radial-gradient(
+      circle at 84% 0%,
+      rgba(59, 130, 246, 0.18),
+      transparent 30rem
+    ),
+    linear-gradient(135deg, #061826 0%, #0a2438 52%, #071b2b 100%);
+}
+.dark .gradient-mesh::before {
+  background: radial-gradient(
+    circle,
+    rgba(30, 109, 145, 0.42),
+    transparent 70%
+  );
+}
+.dark .gradient-mesh::after {
+  background: radial-gradient(
+    circle,
+    rgba(20, 112, 143, 0.28),
+    transparent 70%
+  );
+}
+.dark .gradient-mesh .mesh-blob {
+  background: radial-gradient(
+    circle,
+    rgba(103, 232, 249, 0.16),
+    transparent 70%
+  );
+}
+
+.dark main,
+.dark main > div,
+.dark [class*="min-h-screen"],
+.dark [class*="min-h-\\[calc\\(100vh"] {
+  color: #e6f4fb;
+}
+
+.dark .bg-white,
+.dark .bg-gray-50,
+.dark .bg-slate-50,
+.dark .bg-slate-100,
+.dark .bg-\[\#fff\],
+.dark .bg-\[\#ffffff\],
+.dark .bg-\[\#f4f8fa\],
+.dark .bg-\[\#f5f6f8\],
+.dark .bg-\[\#f5f6f8\],
+.dark .bg-\[\#f6f8f9\],
+.dark .bg-\[\#f7fafb\],
+.dark .bg-\[\#f7fbfc\],
+.dark .bg-\[\#f8fbfc\],
+.dark .bg-\[\#f9fafb\] {
+  background-color: #102d43 !important;
+}
+
+.dark .bg-\[\#e6ebee\],
+.dark .bg-\[\#eef2f4\],
+.dark .bg-\[\#f0f2f4\],
+.dark .bg-\[\#f1f2f4\],
+.dark .bg-\[\#f2f5f7\],
+.dark .bg-\[\#f3f4f6\],
+.dark .bg-\[\#f3f6f8\],
+.dark .bg-\[\#f3f7f9\],
+.dark .bg-\[\#edf4f7\],
+.dark .bg-\[\#e8f3f8\],
+.dark .bg-\[\#eaf4f8\],
+.dark .bg-\[\#e8f5f8\],
+.dark .bg-\[\#e5f1f5\],
+.dark .bg-\[\#dcecf3\] {
+  background-color: #0b2438 !important;
+}
+
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-gray-900,
+.dark .text-gray-800,
+.dark .text-\[\#092a42\],
+.dark .text-\[\#0c2136\],
+.dark .text-\[\#17364c\],
+.dark .text-\[\#0b263a\],
+.dark .text-\[\#0e2a3d\] {
+  color: #e6f4fb !important;
+}
+
+.dark .text-slate-700,
+.dark .text-slate-600,
+.dark .text-slate-500,
+.dark .text-gray-600,
+.dark .text-gray-500,
+.dark .text-\[\#64748b\],
+.dark .text-\[\#667085\],
+.dark .text-\[\#6b7280\],
+.dark .text-\[\#7a93a5\],
+.dark .text-\[\#8a97a5\] {
+  color: #9fb6c7 !important;
+}
+
+.dark .border,
+.dark .border-t,
+.dark .border-b,
+.dark .border-l,
+.dark .border-r,
+.dark .border-gray-100,
+.dark .border-gray-200,
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-\[\#ebebee\],
+.dark .border-\[\#eef3f5\],
+.dark .border-\[\#e5edf1\],
+.dark .border-\[\#e5e7eb\],
+.dark .border-\[\#dbe8ee\],
+.dark .border-\[\#cddde5\],
+.dark .border-\[\#bfd3dc\] {
+  border-color: #24516b !important;
+}
+
+.dark input,
+.dark textarea,
+.dark select,
+.dark [role="combobox"] {
+  background-color: #0b2438 !important;
+  border-color: #24516b !important;
+  color: #e6f4fb !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #7893a7 !important;
+}
+
+/* Legacy dashboard widgets still use inline light colors.  Attribute
+   selectors keep the dark theme effective without rewriting every widget. */
+.dark main [style*="background-color: rgb(255, 255, 255)"],
+.dark main [style*="background-color: #ffffff"],
+.dark main [style*="background-color: #fff"],
+.dark main [style*="background: #fff"],
+.dark main [style*="background: rgb(255, 255, 255)"],
+.dark main [style*="background-color: rgba(255,255,255"],
+.dark main [style*="background: rgba(255,255,255"] {
+  background-color: #102d43 !important;
+}
+.dark main [style*="background-color: #f9fafb"],
+.dark main [style*="background-color: #f3f4f6"],
+.dark main [style*="background-color: #f5f6f8"],
+.dark main [style*="background-color: #f4f8fa"],
+.dark main [style*="background-color: #f7fafc"],
+.dark main [style*="background-color: #f7fbfc"],
+.dark main [style*="background-color: #f0f2f4"],
+.dark main [style*="background: #f9fafb"],
+.dark main [style*="background: #f5f6f8"],
+.dark main [style*="background: #f4f8fa"],
+.dark main [style*="background: #e6ebee"] {
+  background-color: #0b2438 !important;
+}
+.dark main [style*="color: #0c2136"],
+.dark main [style*="color: #092a42"],
+.dark main [style*="color: #17364c"],
+.dark main [style*="color: #374151"] {
+  color: #e6f4fb !important;
+}
+.dark main [style*="color: #64748b"],
+.dark main [style*="color: #6b7280"],
+.dark main [style*="color: #8a97a5"] {
+  color: #9fb6c7 !important;
+}
+.dark header[style*="background-color: rgba(255,255,255"] {
+  background-color: rgba(8, 27, 44, 0.92) !important;
+  border-color: #24516b !important;
+}
+.dark header [style*="color: #0c2136"] {
+  color: #e6f4fb !important;
+}
+.dark table,
+.dark thead,
+.dark tbody,
+.dark tr,
+.dark td,
+.dark th {
+  border-color: #24516b !important;
+}
+.dark .shadow-sm,
+.dark .shadow,
+.dark .shadow-md,
+.dark .shadow-lg {
+  box-shadow: 0 18px 44px -34px rgba(0, 0, 0, 0.85) !important;
+}
+.dark [class~="hover:bg-gray-100"]:hover,
+.dark [class~="hover:bg-slate-50"]:hover,
+.dark [class~="hover:bg-[#f7fbfc]"]:hover,
+.dark [class~="hover:bg-[#f3f8fa]"]:hover {
+  background-color: #173a54 !important;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+/* Final Demi blue override.
+   Правило продукта: элементы интерфейса синие, чистых белых поверхностей нет.
+   Текстовые классы (`text-white`) не трогаем. */
+:root:not(.dark) [class~="bg-white"],
+:root:not(.dark) [class~="bg-gray-50"],
+:root:not(.dark) [class~="bg-slate-50"] {
+  background-color: #e6f3f9 !important;
+}
+
+:root:not(.dark) [class~="bg-white/5"],
+:root:not(.dark) [class~="bg-white/10"],
+:root:not(.dark) [class~="bg-white/20"],
+:root:not(.dark) [class~="bg-gray-50/50"],
+:root:not(.dark) [class~="bg-slate-50/50"] {
+  background-color: rgba(230, 243, 249, 0.88) !important;
+}
+
+:root:not(.dark) body [style*="background-color: #ffffff"],
+:root:not(.dark) body [style*="background-color:#ffffff"],
+:root:not(.dark) body [style*="background-color: #fff"],
+:root:not(.dark) body [style*="background-color:#fff"],
+:root:not(.dark) body [style*="background-color: rgb(255, 255, 255)"],
+:root:not(.dark) body [style*="background: #ffffff"],
+:root:not(.dark) body [style*="background:#ffffff"],
+:root:not(.dark) body [style*="background: #fff"],
+:root:not(.dark) body [style*="background:#fff"],
+:root:not(.dark) body [style*="background: rgb(255, 255, 255)"] {
+  background: #e6f3f9 !important;
+  background-color: #e6f3f9 !important;
+}
+
+:root:not(.dark) body [style*="background-color: #f9fafb"],
+:root:not(.dark) body [style*="background-color:#f9fafb"],
+:root:not(.dark) body [style*="background-color: #f8fbfc"],
+:root:not(.dark) body [style*="background-color:#f8fbfc"],
+:root:not(.dark) body [style*="background-color: #f7fbfc"],
+:root:not(.dark) body [style*="background-color:#f7fbfc"],
+:root:not(.dark) body [style*="background-color: #f7fafc"],
+:root:not(.dark) body [style*="background-color:#f7fafc"],
+:root:not(.dark) body [style*="background-color: #f5f6f8"],
+:root:not(.dark) body [style*="background-color:#f5f6f8"],
+:root:not(.dark) body [style*="background-color: #f4f8fa"],
+:root:not(.dark) body [style*="background-color:#f4f8fa"],
+:root:not(.dark) body [style*="background: #f9fafb"],
+:root:not(.dark) body [style*="background:#f9fafb"],
+:root:not(.dark) body [style*="background: #f5f6f8"],
+:root:not(.dark) body [style*="background:#f5f6f8"],
+:root:not(.dark) body [style*="background: #e6ebee"],
+:root:not(.dark) body [style*="background:#e6ebee"] {
+  background: #d8edf6 !important;
+  background-color: #d8edf6 !important;
+}
+
+.dark [class~="bg-white"],
+.dark [class~="bg-gray-50"],
+.dark [class~="bg-slate-50"] {
+  background-color: #102d43 !important;
+}
+
+.dark [class~="bg-white/5"],
+.dark [class~="bg-white/10"],
+.dark [class~="bg-white/20"],
+.dark [class~="bg-gray-50/50"],
+.dark [class~="bg-slate-50/50"] {
+  background-color: rgba(16, 45, 67, 0.88) !important;
+}
+
+.dark body [style*="background-color: #ffffff"],
+.dark body [style*="background-color:#ffffff"],
+.dark body [style*="background-color: #fff"],
+.dark body [style*="background-color:#fff"],
+.dark body [style*="background-color: rgb(255, 255, 255)"],
+.dark body [style*="background: #ffffff"],
+.dark body [style*="background:#ffffff"],
+.dark body [style*="background: #fff"],
+.dark body [style*="background:#fff"],
+.dark body [style*="background: rgb(255, 255, 255)"] {
+  background: #102d43 !important;
+  background-color: #102d43 !important;
+}
+
+.dark body [style*="background-color: #f9fafb"],
+.dark body [style*="background-color:#f9fafb"],
+.dark body [style*="background-color: #f8fbfc"],
+.dark body [style*="background-color:#f8fbfc"],
+.dark body [style*="background-color: #f7fbfc"],
+.dark body [style*="background-color:#f7fbfc"],
+.dark body [style*="background-color: #f7fafc"],
+.dark body [style*="background-color:#f7fafc"],
+.dark body [style*="background-color: #f5f6f8"],
+.dark body [style*="background-color:#f5f6f8"],
+.dark body [style*="background-color: #f4f8fa"],
+.dark body [style*="background-color:#f4f8fa"],
+.dark body [style*="background: #f9fafb"],
+.dark body [style*="background:#f9fafb"],
+.dark body [style*="background: #f5f6f8"],
+.dark body [style*="background:#f5f6f8"],
+.dark body [style*="background: #e6ebee"],
+.dark body [style*="background:#e6ebee"] {
+  background: #0b2438 !important;
+  background-color: #0b2438 !important;
+}
+
+aside [class*="hover:bg-white"] {
+  background-color: transparent;
+}
+
+aside [class*="hover:bg-white"]:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+/* React сериализует inline hex-цвета в rgb(). Старые правила выше ловили
+   исходные hex-строки, но в реальном DOM часть светлых карточек и тёмного
+   текста из-за этого оставалась неизменной. Этот слой покрывает фактические
+   значения DOM и держит контраст темы единым на старых экранах CRM. */
+.dark body [style*="background-color: rgb(255, 255, 255)"],
+.dark body [style*="background: rgb(255, 255, 255)"],
+.dark body [style*="background-color: rgb(249, 250, 251)"],
+.dark body [style*="background-color: rgb(247, 250, 252)"],
+.dark body [style*="background-color: rgb(245, 246, 248)"],
+.dark body [style*="background-color: rgb(244, 247, 249)"],
+.dark body [style*="background-color: rgb(243, 244, 246)"],
+.dark body [style*="background-color: rgb(242, 245, 247)"],
+.dark body [style*="background-color: rgb(241, 242, 244)"],
+.dark body [style*="background-color: rgb(240, 242, 244)"],
+.dark body [style*="background-color: rgb(238, 242, 244)"],
+.dark body [style*="background: rgb(249, 250, 251)"],
+.dark body [style*="background: rgb(245, 246, 248)"],
+.dark body [style*="background: rgb(230, 235, 238)"] {
+  background: #102d43 !important;
+  background-color: #102d43 !important;
+}
+
+.dark body [style*="color: rgb(12, 33, 54)"],
+.dark body [style*="color: rgb(9, 42, 66)"],
+.dark body [style*="color: rgb(23, 54, 76)"],
+.dark body [style*="color: rgb(12, 31, 51)"],
+.dark body [style*="color: rgb(36, 66, 92)"],
+.dark body [style*="color: rgb(55, 65, 81)"],
+.dark body [style*="color: rgb(69, 89, 106)"] {
+  color: #e6f4fb !important;
+  -webkit-text-fill-color: #e6f4fb !important;
+}
+
+.dark body [style*="color: rgb(107, 125, 138)"],
+.dark body [style*="color: rgb(107, 114, 128)"],
+.dark body [style*="color: rgb(92, 111, 124)"],
+.dark body [style*="color: rgb(138, 151, 165)"],
+.dark body [style*="color: rgb(138, 154, 166)"],
+.dark body [style*="color: rgb(120, 144, 159)"],
+.dark body [style*="color: rgb(123, 138, 149)"] {
+  color: #a9bfcd !important;
+  -webkit-text-fill-color: #a9bfcd !important;
+}
+
+.dark body [style*="border-color: rgb(235, 235, 238)"],
+.dark body [style*="border-color: rgb(229, 231, 235)"],
+.dark body [style*="border-color: rgb(219, 232, 238)"],
+.dark body [style*="border-color: rgb(205, 221, 229)"],
+.dark body [style*="border-color: rgb(211, 221, 227)"] {
+  border-color: #24516b !important;
+}
+
+/* Finance P&L subtotal rows have their own light fill. Keep them blue in dark mode. */
+.dark .finance-result-row:not(.finance-result-row--final) {
+  background: #16384f !important;
+  border: 1px solid #2b5870;
+}
+
+.dark option {
+  background: #0b2438;
+  color: #e6f4fb;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #355b72;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #4b7188;
+}
+
+/* Точечный ночной слой для CRM-экранов, где старые компоненты используют
+   дополнительные белые/пастельные заливки. Messenger намеренно не входит
+   в этот scope. */
+.dark .dr-topbar {
+  background: rgba(8, 27, 44, 0.94) !important;
+  border-bottom-color: #24516b !important;
+  box-shadow: 0 10px 28px -20px rgba(0, 0, 0, 0.9) !important;
+}
+
+.dark [data-dark-blue-surfaces] .glass {
+  background: rgba(16, 45, 67, 0.9) !important;
+  border-color: #24516b !important;
+}
+
+.dark [data-dark-blue-surfaces] [class~="bg-white/50"],
+.dark [data-dark-blue-surfaces] [class~="bg-white/60"],
+.dark [data-dark-blue-surfaces] [class~="bg-white/70"],
+.dark [data-dark-blue-surfaces] [class~="bg-white/80"],
+.dark [data-dark-blue-surfaces] [class~="bg-white/90"],
+.dark [data-dark-blue-surfaces] .bg-\[\#eef4f7\],
+.dark [data-dark-blue-surfaces] .bg-\[\#eef7fa\],
+.dark [data-dark-blue-surfaces] .bg-\[\#f5f8fa\],
+.dark [data-dark-blue-surfaces] .bg-\[\#f8fafc\],
+.dark [data-dark-blue-surfaces] .bg-\[\#f9fcfd\],
+.dark [data-dark-blue-surfaces] .bg-\[\#eff6ff\],
+.dark [data-dark-blue-surfaces] .bg-\[\#f0fdf4\],
+.dark [data-dark-blue-surfaces] .bg-\[\#fef2f2\],
+.dark [data-dark-blue-surfaces] .bg-\[\#edf2f4\],
+.dark [data-dark-blue-surfaces] .bg-\[\#f1f2f4\] {
+  background-color: #15364e !important;
+}
+
+.dark [data-dark-blue-surfaces] [style*="background-color: #eff6ff"],
+.dark [data-dark-blue-surfaces] [style*="background-color: #f0fdf4"],
+.dark [data-dark-blue-surfaces] [style*="background-color: #fef2f2"],
+.dark [data-dark-blue-surfaces] [style*="background-color: #f8fafc"],
+.dark [data-dark-blue-surfaces] [style*="background-color: #eef7fa"],
+.dark [data-dark-blue-surfaces] [style*="background-color: #eef4f7"],
+.dark [data-dark-blue-surfaces] [style*="background-color: #f5f8fa"],
+.dark [data-dark-blue-surfaces] [style*="background-color: rgb(239, 246, 255)"],
+.dark [data-dark-blue-surfaces] [style*="background-color: rgb(240, 253, 244)"],
+.dark [data-dark-blue-surfaces] [style*="background-color: rgb(254, 242, 242)"],
+.dark [data-dark-blue-surfaces] [style*="background-color: rgb(248, 250, 252)"],
+.dark [data-dark-blue-surfaces] [style*="background-color: rgb(238, 247, 250)"],
+.dark [data-dark-blue-surfaces] [style*="background-color: rgb(238, 244, 247)"],
+.dark
+  [data-dark-blue-surfaces]
+  [style*="background-color: rgb(245, 248, 250)"] {
+  background: #15364e !important;
+  background-color: #15364e !important;
+}
+
+/* Цвет сотрудника раньше превращал карточки сделок в почти белую пастель. */
+.dark [data-dark-blue-surfaces] article[data-deal-id] {
+  background-color: #102d43 !important;
+}
+
+.dark [data-dark-blue-surfaces] .text-\[\#334155\],
+.dark [data-dark-blue-surfaces] .text-\[\#526a79\],
+.dark [data-dark-blue-surfaces] .text-\[\#6f8491\],
+.dark [data-dark-blue-surfaces] .text-\[\#718493\],
+.dark [data-dark-blue-surfaces] .text-\[\#78909f\],
+.dark [data-dark-blue-surfaces] [style*="color: #334155"],
+.dark [data-dark-blue-surfaces] [style*="color: #526b78"],
+.dark [data-dark-blue-surfaces] [style*="color: #6f8491"],
+.dark [data-dark-blue-surfaces] [style*="color: #718493"],
+.dark [data-dark-blue-surfaces] [style*="color: #78909f"],
+.dark [data-dark-blue-surfaces] [style*="color: rgb(51, 65, 85)"],
+.dark [data-dark-blue-surfaces] [style*="color: rgb(82, 107, 120)"],
+.dark [data-dark-blue-surfaces] [style*="color: rgb(111, 132, 145)"],
+.dark [data-dark-blue-surfaces] [style*="color: rgb(113, 132, 147)"],
+.dark [data-dark-blue-surfaces] [style*="color: rgb(120, 144, 159)"] {
+  color: #b8ccd8 !important;
+  -webkit-text-fill-color: #b8ccd8 !important;
+}
+
+/* Общий контракт dark theme: ни одна базовая белая/серая поверхность не
+   остаётся серой. Нужен для старых экранов задач, финансов и маркетинга,
+   где фон задан utility-классом с прозрачностью или shorthand background. */
+.dark [class~="bg-white/40"],
+.dark [class~="bg-white/50"],
+.dark [class~="bg-white/60"],
+.dark [class~="bg-white/70"],
+.dark [class~="bg-white/80"],
+.dark [class~="bg-white/90"],
+.dark [class~="bg-gray-50/60"],
+.dark [class~="bg-slate-50/60"],
+.dark .bg-\[\#eef4f7\],
+.dark .bg-\[\#eef7fa\],
+.dark .bg-\[\#f1f2f4\],
+.dark .bg-\[\#f3f4f6\],
+.dark .bg-\[\#f5f6f8\],
+.dark .bg-\[\#f8fafc\],
+.dark .bg-\[\#f9fafb\] {
+  background-color: #102d43 !important;
+}
+
+.dark body [style*="background: rgb(249, 250, 251)"],
+.dark body [style*="background: rgb(248, 250, 252)"],
+.dark body [style*="background: rgb(245, 246, 248)"],
+.dark body [style*="background: rgb(243, 244, 246)"],
+.dark body [style*="background: rgb(241, 242, 244)"],
+.dark body [style*="background: rgb(238, 247, 250)"],
+.dark body [style*="background: rgb(238, 244, 247)"] {
+  background: #102d43 !important;
+  background-color: #102d43 !important;
+}
+
+/* Полупрозрачные светлые шапки старых экранов (например, «Маркетинг»)
+   React оставляет как rgba, поэтому они требуют отдельного правила. */
+.dark body [style*="background-color: rgba(255, 255, 255, 0.95)"],
+.dark body [style*="background-color:rgba(255, 255, 255, 0.95)"],
+.dark body [style*="background-color: rgba(255, 255, 255, 0.8)"],
+.dark body [style*="background-color:rgba(255, 255, 255, 0.8)"] {
+  background: rgba(16, 45, 67, 0.96) !important;
+  background-color: rgba(16, 45, 67, 0.96) !important;
+}
+
+/* Полный контракт контраста для ночной темы.
+   В старых экранах используются десятки близких светлых hex-заливок. Они
+   сгруппированы по смыслу, чтобы карточки не оставались белыми, а статусы
+   (успех, ошибка, предупреждение, ИИ) по-прежнему различались цветом. */
+.dark .bg-gray-100,
+.dark .bg-gray-200,
+.dark .bg-gray-300,
+.dark .bg-slate-200,
+.dark .bg-slate-300,
+.dark .bg-slate-200\/50,
+.dark .bg-\[\#eef5f9\],
+.dark .bg-\[\#eef5f8\],
+.dark .bg-\[\#e9eff2\],
+.dark .bg-\[\#e8eff3\],
+.dark .bg-\[\#e4f1f6\],
+.dark .bg-\[\#dceef5\],
+.dark .bg-\[\#d8edf6\],
+.dark .bg-\[\#e6f3f9\],
+.dark .bg-\[\#eaf6fb\],
+.dark .bg-\[\#eff9fc\],
+.dark .bg-\[\#eef8fc\],
+.dark .bg-\[\#f3f8fa\],
+.dark .bg-\[\#f3f6f7\],
+.dark .bg-\[\#f5fafd\],
+.dark .bg-\[\#f5fbfe\],
+.dark .bg-\[\#f6fafb\],
+.dark .bg-\[\#f7fafc\],
+.dark .bg-\[\#f7fbfd\],
+.dark .bg-\[\#f8fafb\],
+.dark .bg-\[\#f9fcfd\] {
+  background-color: #102d43 !important;
+}
+
+.dark .bg-white\/40,
+.dark .bg-white\/50,
+.dark .bg-white\/60,
+.dark .bg-white\/70,
+.dark .bg-white\/80,
+.dark .bg-white\/85,
+.dark .bg-white\/90 {
+  background-color: rgba(16, 45, 67, 0.94) !important;
+}
+
+/* Информационные голубые поверхности. */
+.dark .bg-\[\#dbeafe\],
+.dark .bg-\[\#dcecf3\],
+.dark .bg-\[\#dff3f7\],
+.dark .bg-\[\#e4f3f9\],
+.dark .bg-\[\#dceff6\],
+.dark .bg-\[\#e0f2fe\],
+.dark .bg-\[\#e7f2f7\],
+.dark .bg-\[\#edf7fb\],
+.dark .bg-\[\#e8f5fa\],
+.dark .bg-\[\#e7f3f7\],
+.dark .bg-\[\#e7f5f8\],
+.dark .bg-\[\#e8f5f8\],
+.dark .bg-\[\#eaf4f8\],
+.dark .bg-\[\#eaf5f8\] {
+  background-color: #123a55 !important;
+}
+
+/* Семантические поверхности статусов. */
+.dark .bg-emerald-50,
+.dark .bg-green-50,
+.dark .bg-\[\#eef8f3\],
+.dark .bg-\[\#e7f5ed\],
+.dark .bg-\[\#e6f3ec\] {
+  background-color: #123d36 !important;
+}
+
+.dark .bg-red-50,
+.dark .bg-rose-50,
+.dark .bg-\[\#fee2e2\],
+.dark .bg-\[\#fff1f2\],
+.dark .bg-\[\#fff5f5\],
+.dark .bg-\[\#fff8f7\] {
+  background-color: #442a35 !important;
+}
+
+.dark .bg-amber-50,
+.dark .bg-yellow-50,
+.dark .bg-\[\#fff0cf\] {
+  background-color: #42351e !important;
+}
+
+.dark .bg-violet-50,
+.dark .bg-purple-50,
+.dark .bg-\[\#ddd6fe\],
+.dark .bg-\[\#e0e7ff\],
+.dark .bg-\[\#ede9fe\],
+.dark .bg-\[\#faf8ff\] {
+  background-color: #302850 !important;
+}
+
+/* Тёмный текст старых экранов должен оставаться читаемым после затемнения
+   поверхности. Брендовые и статусные оттенки сохраняют своё значение. */
+.dark .text-gray-700,
+.dark .text-\[\#243d4d\],
+.dark .text-\[\#334155\],
+.dark .text-\[\#35566b\],
+.dark .text-\[\#3e5665\],
+.dark .text-\[\#5c7485\],
+.dark .text-\[\#5f7482\],
+.dark .text-\[\#617786\],
+.dark .text-\[\#6c7f8c\],
+.dark .text-\[\#718493\],
+.dark .text-\[\#78909f\],
+.dark .text-\[\#7f96a8\],
+.dark .text-\[\#8a9ca8\],
+.dark .text-\[\#8fa8b8\],
+.dark .text-\[\#9aabb5\],
+.dark .text-\[\#9fb7c6\] {
+  color: #b8ccd8 !important;
+}
+
+.dark .text-\[\#075a78\],
+.dark .text-\[\#0c4d6c\],
+.dark .text-\[\#0c5067\],
+.dark .text-\[\#0c5b78\],
+.dark .text-\[\#0c5f7e\],
+.dark .text-\[\#0c6b8a\],
+.dark .text-\[\#16805f\],
+.dark .text-\[\#1784a6\] {
+  color: #8ed8ef !important;
+}
+
+.dark .text-emerald-700,
+.dark .text-green-700,
+.dark .text-\[\#15803d\],
+.dark .text-\[\#1d5b43\],
+.dark .text-\[\#237354\],
+.dark .text-\[\#2d8a65\],
+.dark .text-\[\#55917a\] {
+  color: #7ee0b2 !important;
+}
+
+.dark .text-red-600,
+.dark .text-red-700,
+.dark .text-rose-700,
+.dark .text-\[\#7f3131\],
+.dark .text-\[\#9a3838\],
+.dark .text-\[\#a52a2a\],
+.dark .text-\[\#b91c1c\],
+.dark .text-\[\#dc2626\] {
+  color: #ff9b9b !important;
+}
+
+.dark .text-amber-700,
+.dark .text-yellow-700,
+.dark .text-\[\#8a5a00\],
+.dark .text-\[\#b06b00\] {
+  color: #f6cf72 !important;
+}
+
+.dark .text-violet-700,
+.dark .text-purple-700,
+.dark .text-\[\#3730a3\],
+.dark .text-\[\#5b21b6\],
+.dark .text-\[\#6d28d9\] {
+  color: #c4b5fd !important;
+}
+
+.dark .border-gray-300,
+.dark .border-slate-300,
+.dark .border-\[\#ccd8df\],
+.dark .border-\[\#cfdee5\],
+.dark .border-\[\#d8e3e8\],
+.dark .border-\[\#d9e3e8\],
+.dark .border-\[\#d9e8ee\],
+.dark .border-\[\#dce5ea\],
+.dark .border-\[\#dce7ec\],
+.dark .border-\[\#e0e7eb\],
+.dark .border-\[\#e3edf1\],
+.dark .border-\[\#e4eaee\],
+.dark .border-\[\#edf2f4\] {
+  border-color: #315b73 !important;
+}
+
+.dark .skeleton {
+  background: linear-gradient(90deg, #102d43 25%, #1a4059 50%, #102d43 75%);
+  background-size: 200% 100%;
+}
+
+/* Demi Results CRM: deliberate, static operational surfaces. These rules are
+   scoped to the dashboard shell so legacy public/auth screens keep their own UI. */
+.dr-app-shell {
+  --dr-canvas: #f5f6f8;
+  --dr-surface: #ffffff;
+  --dr-surface-muted: #f7fbfd;
+  --dr-ink: #0c2136;
+  --dr-muted: #536b7b;
+  --dr-border: #e5e7eb;
+  --dr-accent: #0c4d6c;
+  background: var(--dr-canvas);
+  color: var(--dr-ink);
+  font-size: 14px;
+}
+.dark .dr-app-shell {
+  --dr-canvas: #061826;
+  --dr-surface: #0b2438;
+  --dr-surface-muted: #102b40;
+  --dr-ink: #e6f4fb;
+  --dr-muted: #acc1d0;
+  --dr-border: #29495e;
+  --dr-accent: #8cdbef;
+}
+.dr-app-shell main { background: var(--dr-canvas) !important; }
+.dr-topbar {
+  position: sticky; top: 0; z-index: 10; height: 52px;
+  background: rgba(255,255,255,.85) !important; backdrop-filter: blur(12px); border-bottom: 1px solid rgba(0,0,0,.06) !important;
+  box-shadow: none !important;
+}
+.dark .dr-topbar { background: var(--dr-surface) !important; border-bottom-color: var(--dr-border) !important; box-shadow: none !important; }
+.dr-mark { background: #0c4d6c; }
+.dark .dr-mark { background: #0f6f91; color: #061826; }
+.dr-app-shell :focus-visible { outline: 2px solid #0f6f91; outline-offset: 2px; }
+.dark .dr-app-shell :focus-visible { outline-color: #8cdbef; }
+.dr-app-shell button:disabled,
+.dr-app-shell input:disabled,
+.dr-app-shell select:disabled { cursor: not-allowed; opacity: .56; }
+.dr-app-shell [data-dark-blue-surfaces] { background: var(--dr-canvas) !important; }
+.dr-app-shell [data-dark-blue-surfaces] > header,
+.dr-app-shell [data-dark-blue-surfaces] > header.bg-white { background: var(--dr-surface) !important; border-color: var(--dr-border) !important; }
+.dr-app-shell [data-dark-blue-surfaces] .bg-white,
+.dr-app-shell [data-dark-blue-surfaces] .bg-\[\#f8fbfc\],
+.dr-app-shell [data-dark-blue-surfaces] .bg-\[\#f9fcfd\] { background-color: var(--dr-surface) !important; }
+.dr-app-shell [data-dark-blue-surfaces] .border,
+.dr-app-shell [data-dark-blue-surfaces] .border-b,
+.dr-app-shell [data-dark-blue-surfaces] .border-t { border-color: var(--dr-border) !important; }
+/* Kanban needs a visible target even while a card is being dragged. */
+.dr-app-shell [data-dark-blue-surfaces] [class*="ring-"] { box-shadow: inset 0 0 0 2px #0f6f91 !important; }
+.dark .dr-app-shell [data-dark-blue-surfaces] [class*="ring-"] { box-shadow: inset 0 0 0 2px #8cdbef !important; }
+.dr-app-shell aside [class*="transition"],
+.dr-app-shell aside [class*="shadow-"] { transition: none !important; box-shadow: none !important; }
+.dr-app-shell aside .bg-gradient-to-br { background-image: none !important; background-color: #0c4d6c !important; }
+.dr-app-shell *,
+.dr-app-shell *::before,
+.dr-app-shell *::after { animation: none !important; transition: none !important; }
+.dr-app-shell .animate-pulse,
+.dr-app-shell .animate-fade-in,
+.dr-app-shell .stagger-children > * { opacity: 1 !important; transform: none !important; }
+@media (max-width: 767px) {
+  .dr-topbar { padding-inline: 12px; }
+  .dr-app-shell main > div { padding-inline: 12px; }
+}
+
+/* Samat shell: restored navigation and neutral operational surfaces. */
+.dr-app-shell aside[data-ui="samat"] { background: #0c1f33 !important; color: #fff; }

@@ -1,0 +1,44 @@
+# Secrets: keep only empty/example configuration.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+credentials*
+
+# Dependencies and generated artifacts.
+node_modules/
+.next/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.tsbuildinfo
+next-env.d.ts
+# Training recordings are separate production assets, not needed for bot/demo.
+crm/public/help-training/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# Runtime and personal data.
+/data/
+/backend/data/
+/demo/data/
+/media/
+/backend/media/
+/backups/
+/backend/backups/
+/.local/
+*.sqlite*
+*.db
+*.dump
+*.pg_dump
+celerybeat-schedule*
+*.log
+!docs/reports/checks-final.log
+!docs/reports/build-final.log
