@@ -7,6 +7,11 @@
 Ветка `fix/durable-approvals-and-recovery`, PR #1; основной код `76feb41`.
 Подробности и границы проверки: [RELIABILITY_RU.md](RELIABILITY_RU.md).
 
+Продолжение без OpenAI: [ограниченный browser E2E](BROWSER_QA_RU.md).
+Подтверждены реальные QA-входы владельца/сотрудника, lifecycle сотрудника,
+CRUD консультации, отказ изменения роли и часть финансового CRUD.
+Это отдельная синтетическая база, не полная матрица CRM и не live client send.
+
 - Узко обновлены backend, worker и beat. Перед этим сверены все runtime Python
   trees и 48 полей конфигурации каждого процесса с текущим compose; сохранены
   scoped backup и три rollback-образа. CRM/frontend, соседние сервисы и данные
