@@ -1,4 +1,4 @@
-Using Python 3.12.14 environment at: output/green-return-20261021/.venv
+# Frozen from Python 3.12.14; install with the uv pip sync command in README.md.
 amqp==5.4.1
 annotated-doc==0.0.5
 annotated-types==0.8.0
