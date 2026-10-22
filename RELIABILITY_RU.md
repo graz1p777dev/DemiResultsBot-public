@@ -71,6 +71,7 @@ Telegram updates. Тексты клиентов, телефоны, токены 
 | Current runtime + patch | 122 passed + 16 subtests в изолированной копии текущих Python modules | Никакие production env/данные не загружались в pytest |
 | Публичная CRM | 24 tests, TypeScript и Next build | Из предыдущего этапа этой сессии; frontend не изменён |
 | Полная CRM | 398 passed, 10 gated skipped | Отдельная копия source/tests/migrations без env; auth/provider mocks |
+| Отдельный live CRM DB smoke | 10 passed | Реальная БД; auth owner mocked; записи блокируются fetch guard, проверенный RPC только SELECT |
 | Демо | 4 passed | Локальные правила, без LLM |
 | Зависимости | 65 pinned packages, `uv pip check` и Docker `pip check` проходят | Linux-зависимость greenlet добавлена в lock |
 
@@ -103,3 +104,8 @@ Instagram identity проверен read-only: HTTP 200 и совпадение 
 Настоящие Telegram-клики требуют человека в Telegram и согласованного тестового
 диалога. Разовая read-only проверка прошедшей ночи назначена на 23.10 после открытия
 (Asia/Bishkek); при отсутствии реальных входящих результат будет неполным.
+
+Временные QA-контейнеры, образы, исходники и ровно 20 идентифицированных cache
+records этого продолжения удалены. Остались рабочие сервисы и проверенные rollback
+артефакты. Свободно около 2 ГБ из 48 ГБ (96% занято); общий вопрос ёмкости этим
+не закрыт. См. CAPACITY_RU.md. Чужие backup, образы и базы не очищались.

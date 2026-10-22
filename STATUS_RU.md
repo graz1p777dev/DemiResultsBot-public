@@ -19,8 +19,10 @@
 - Повторно проверены 122 backend tests + 16 subtests, 12 PG checks, два реальных
   Celery worker с Redis, отказ/перезапуск worker, 4 demo tests; полный QA Compose
   завершился с exit 0. Синтетические провайдеры, без production env/БД в тестах.
-- Отдельная копия текущей полной CRM: 398 passed, 10 gated skipped. Копировались
-  source/tests/migrations без env; права/транспорт mocked. Это не browser E2E.
+- Отдельная копия текущей полной CRM: 398 passed, 10 gated skipped. Затем эти
+  10 live read-only DB smoke выполнены отдельно: 10 passed. В live smoke переданы
+  только необходимые Supabase credentials; fetch ограничен чтением и проверенным
+  SELECT-only RPC. Auth context mocked owner. Это не browser E2E.
 - Live synthetic voice и vision действительно вызвали OpenAI: оба получили 429
   с признаком исчерпанной квоты. Средства на счёт не добавлялись.
 - Instagram: read-only identity endpoint вернул 200, ID совпал с настроенным.
