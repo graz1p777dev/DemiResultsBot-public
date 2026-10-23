@@ -1,7 +1,9 @@
 import io
 import json
 import logging
+import os
 import re
+from threading import local
 from time import monotonic, perf_counter
 
 import httpx
@@ -71,8 +73,25 @@ class _QuotaAwareOpenAI(OpenAI):
         return super()._should_retry(response)
 
 
+_clients = local()
+
+
+def _pooled_client(provider: str, api_key: str) -> OpenAI:
+    # Reuse connections within a worker/thread, never inherit a parent's pool.
+    pid = os.getpid()
+    cached = getattr(_clients, provider, None)
+    if cached and cached[0] == pid and cached[1] == api_key and not cached[2].is_closed():
+        return cached[2]
+    client = (_QuotaAwareOpenAI(api_key=api_key) if provider == 'openai'
+              else OpenAI(api_key=api_key, base_url='https://api.deepseek.com/v1'))
+    if cached and cached[0] == pid:
+        cached[2].close()
+    setattr(_clients, provider, (pid, api_key, client))
+    return client
+
+
 def _client() -> OpenAI:
-    return _QuotaAwareOpenAI(api_key=settings.openai_api_key)
+    return _pooled_client('openai', settings.openai_api_key)
 
 
 _quota_cooldown = None  # Process-local (key, monotonic deadline), never persisted.
@@ -555,7 +574,7 @@ def detect_and_translate(client_message: str, ai_reply: str) -> dict[str, str | 
 
 
 def _deepseek_client() -> OpenAI:
-    return OpenAI(api_key=settings.deepseek_api_key, base_url="https://api.deepseek.com/v1")
+    return _pooled_client('deepseek', settings.deepseek_api_key)
 
 
 def call_gemini(model: str, messages: list[dict], temperature: float = 0.5) -> tuple[str, dict]:

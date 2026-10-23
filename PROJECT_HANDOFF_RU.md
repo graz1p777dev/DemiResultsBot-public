@@ -43,6 +43,8 @@ backend CRM_CHANNEL_SEND_URL → CRM /api/internal/channel-send
 
 ## Подтверждённое состояние
 
+Следующий точечный выпуск: [повторное использование AI-соединений](OPTIMIZATION_20261023.md) установлено на production; 209 backend tests + 16 subtests. [Схема работы бота и backend](SYSTEM_OVERVIEW_RU.md) описывает компоненты, согласование, ночной режим и ограничения.
+
 Последнее точечное изменение: [ускорение Telegram при исчерпанной квоте](TELEGRAM_LATENCY_20261023.md). На production установлен обход лишних quota retries; буфер 30 с. Синтетический AI-замер ускорился с 20.182 до 8.082 с; полный свежий клиентский цикл после установки пока не измерен. Не переотправлять старые сообщения ради проверки.
 
 При последней live-проверке backend healthy, worker/beat запущены, backend `/health` → `{"status":"ok"}`, CRM login → HTTP 200. Production CRM HEAD — `eb79010`.
@@ -82,11 +84,11 @@ Outbox/reservation, recovery, Telegram update dedup/TTL и fencing реализ�
 При последней сверке production source/runtime:
 
 ```text
-dffbb26f35ba10ebfd8e2ca1725ffa4c9a5e86f1b2e7b8910a25bc6878aa5a22  services/openai_service.py
+ca2de83c4d552dbe334f5ad3c39bb43643f907e7c7284fbb7b08a4a15d2cad76  services/openai_service.py
 a0e09b03f6dd6d2ad813ca776fe83cae0c60a80bb1188ebda7a8e02b2eeaceed  tasks/pipeline.py
 ```
 
-Исходная приватная snapshot-копия: 179 backend tests + 16 subtests. Текущая continuation-копия после quota fix: 203 passed + 16 subtests. Провайдеры mocked; успешный voice live-gate этим не подтверждён. Команды и переносимый offline PG/Redis/Celery QA — в README.md, TESTING_RU.md и qa/README.md. Не загружать production env в pytest/build/QA-браузер.
+Исходная приватная snapshot-копия: 179 backend tests + 16 subtests. Текущая continuation-копия после quota и connection reuse fix: 209 passed + 16 subtests. Провайдеры mocked; успешный voice live-gate этим не подтверждён. Команды и переносимый offline PG/Redis/Celery QA — в README.md, TESTING_RU.md и qa/README.md. Не загружать production env в pytest/build/QA-браузер.
 
 Основные файлы: `backend/app/api/admin.py`, `backend/app/services/openai_service.py`, `backend/app/tasks/pipeline.py`, `backend/app/services/telegram.py`, `backend/app/services/reply_hours.py`, `crm/src/lib/green-whatsapp.ts`, `crm/src/lib/crm-ingest.ts`.
 
