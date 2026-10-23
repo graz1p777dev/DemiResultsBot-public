@@ -2,12 +2,12 @@ import io
 import json
 import logging
 import re
-from time import perf_counter
+from time import monotonic, perf_counter
 
 import httpx
 from openai import APIStatusError, BadRequestError, OpenAI
 from pydantic import BaseModel
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from app.core.config import settings
 from app.services.prompts import (
@@ -51,8 +51,31 @@ class AIResult(BaseModel):
     reasoning: str | None = None
 
 
+def _quota_error(exc) -> bool:
+    return isinstance(exc, APIStatusError) and exc.status_code == 429 and exc.code in {'credit_balance_exhausted', 'insufficient_quota'}
+
+
+class _QuotaAwareOpenAI(OpenAI):
+    # SDK 3.10 retries every 429 by default. Exhausted credit cannot recover by
+    # waiting seconds; retain the SDK policy for rate limits and other errors.
+    def _should_retry(self, response) -> bool:
+        if response.status_code == 429:
+            try:
+                response.read()
+                data = response.json()
+            except ValueError:
+                data = None
+            error = data.get('error') if isinstance(data, dict) else None
+            if isinstance(error, dict) and error.get('code') in {'credit_balance_exhausted', 'insufficient_quota'}:
+                return False
+        return super()._should_retry(response)
+
+
 def _client() -> OpenAI:
-    return OpenAI(api_key=settings.openai_api_key)
+    return _QuotaAwareOpenAI(api_key=settings.openai_api_key)
+
+
+_quota_cooldown = None  # Process-local (key, monotonic deadline), never persisted.
 
 
 def _create_completion(**kwargs):
@@ -64,42 +87,43 @@ def _create_completion(**kwargs):
     он устареет к следующему релизу OpenAI. Поэтому ловим конкретный отказ один
     раз и повторяем запрос без параметра.
     """
+    global _quota_cooldown
     allow_quota_fallback = kwargs.pop("_allow_quota_fallback", True)
-    try:
+    can_fallback = (allow_quota_fallback and bool(settings.deepseek_api_key)
+        and not set(kwargs) - {"model", "messages", "temperature", "response_format", "max_tokens", "max_completion_tokens"}
+        and kwargs.get("response_format", {}).get("type", "text") in {"text", "json_object"}
+        and all(isinstance(message.get("content"), str) for message in kwargs.get("messages", [])))
+    cooling = (can_fallback and _quota_cooldown is not None
+        and _quota_cooldown[0] == settings.openai_api_key and monotonic() < _quota_cooldown[1])
+    if not cooling:
         try:
-            return _client().chat.completions.create(**kwargs)
-        except BadRequestError as exc:
-            if "temperature" not in kwargs or "temperature" not in str(exc):
+            try:
+                return _client().chat.completions.create(**kwargs)
+            except BadRequestError as exc:
+                if "temperature" not in kwargs or "temperature" not in str(exc):
+                    raise
+                _log.warning("model %s rejects temperature, retrying with the default", kwargs.get("model"))
+                kwargs.pop("temperature")
+                return _client().chat.completions.create(**kwargs)
+        except APIStatusError as exc:
+            if not _quota_error(exc) or not can_fallback:
                 raise
-            _log.warning("model %s rejects temperature, retrying with the default", kwargs.get("model"))
-            kwargs.pop("temperature")
-            return _client().chat.completions.create(**kwargs)
-    except APIStatusError as exc:
-        if (exc.status_code != 429
-                or exc.code not in {"credit_balance_exhausted", "insufficient_quota"}
-                or not allow_quota_fallback
-                or not settings.deepseek_api_key
-                or set(kwargs) - {"model", "messages", "temperature", "response_format", "max_tokens", "max_completion_tokens"}
-                or kwargs.get("response_format", {}).get("type", "text") not in {"text", "json_object"}
-                or not all(isinstance(message.get("content"), str) for message in kwargs.get("messages", []))):
-            raise
+            _quota_cooldown = (settings.openai_api_key, monotonic() + 300)
         _log.warning("OpenAI quota exhausted; using existing DeepSeek text client")
-        fallback_kwargs = {**kwargs, "model": "deepseek-flash", "extra_body": {"thinking": {"type": "disabled"}}}
-        if "max_completion_tokens" in fallback_kwargs:
-            if "max_tokens" in fallback_kwargs:
-                raise ValueError("Conflicting completion token limits")
-            fallback_kwargs["max_tokens"] = fallback_kwargs.pop("max_completion_tokens")
-        response = _deepseek_client().chat.completions.create(**fallback_kwargs)
-        # The fallback must fail through to the caller's existing manual path,
-        # rather than turn an empty or malformed JSON response into a draft.
-        content = response.choices[0].message.content
-        if not content or not content.strip():
-            raise ValueError("DeepSeek returned an empty completion")
-        if kwargs.get("response_format", {}).get("type") == "json_object":
-            if not isinstance(json.loads(content), dict):
-                raise ValueError("DeepSeek did not return a JSON object")
-        object.__setattr__(response, "_fallback_provider", "deepseek")
-        return response
+    fallback_kwargs = {**kwargs, "model": "deepseek-flash", "extra_body": {"thinking": {"type": "disabled"}}}
+    if "max_completion_tokens" in fallback_kwargs:
+        if "max_tokens" in fallback_kwargs:
+            raise ValueError("Conflicting completion token limits")
+        fallback_kwargs["max_tokens"] = fallback_kwargs.pop("max_completion_tokens")
+    response = _deepseek_client().chat.completions.create(**fallback_kwargs)
+    content = response.choices[0].message.content
+    if not content or not content.strip():
+        raise ValueError("DeepSeek returned an empty completion")
+    if kwargs.get("response_format", {}).get("type") == "json_object":
+        if not isinstance(json.loads(content), dict):
+            raise ValueError("DeepSeek did not return a JSON object")
+    object.__setattr__(response, "_fallback_provider", "deepseek")
+    return response
 
 
 def _usage_payload(response) -> dict:
@@ -231,7 +255,7 @@ def _clean_dialogue(dialogue: list[dict]) -> list[dict]:
     return cleaned
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10), retry=retry_if_exception(lambda exc: not _quota_error(exc)))
 def generate_reply(
     dialogue: list[dict],
     slot_context: dict,
@@ -665,7 +689,7 @@ def _normalize_intent(fallback: dict, raw: str | None) -> dict:
     return content
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10), retry=retry_if_exception(lambda exc: not _quota_error(exc)))
 def classify_sales_intent(dialogue: list[dict], latest_message: str) -> AIResult:
     fallback = {"is_sales": True, "is_complex": True, "is_purchase": False, "reason": "no_key"}
     model = "deepseek-v4-flash"
@@ -728,7 +752,7 @@ def classify_sales_intent(dialogue: list[dict], latest_message: str) -> AIResult
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10), retry=retry_if_exception(lambda exc: not _quota_error(exc)))
 def extract_fields(dialogue: list[dict], contacts: str | None) -> AIResult:
     empty = {
         "skin_problem": [],
@@ -766,7 +790,7 @@ def extract_fields(dialogue: list[dict], contacts: str | None) -> AIResult:
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10), retry=retry_if_exception(lambda exc: not _quota_error(exc)))
 def ai_edit_reply(original_reply: str, client_message: str, edit_prompt: str) -> AIResult:
     if not settings.openai_api_key:
         return AIResult(content=original_reply, model=settings.openai_model, purpose="ai_edit")
@@ -841,7 +865,7 @@ def normalize_target_language(language: str) -> str:
     return _LANGUAGE_ALIASES.get(cleaned, cleaned or "русский")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10), retry=retry_if_exception(lambda exc: not _quota_error(exc)))
 def translate_reply(original_reply: str, client_message: str, target_language: str) -> AIResult:
     language = normalize_target_language(target_language)
     if not settings.openai_api_key:
@@ -912,7 +936,7 @@ def explain_reply(client_message: str, reply: str, conversation_summary: str | N
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10), retry=retry_if_exception(lambda exc: not _quota_error(exc)))
 def analyze_manager_corrections(examples: list[dict]) -> AIResult:
     """Group manager edits of bot drafts into common mistake patterns for the Laboratory analysis tool."""
     if not settings.openai_api_key:
