@@ -29,7 +29,7 @@ CONSULTATIVE_METHOD_PROMPT = """
 """.strip()
 
 _PICTURE_RE = re.compile(r'\[picture\]\s*(https?://\S+)')
-_VOICE_RE = re.compile(r'\[voice\]\s*(https?://\S+)\s*')
+_VOICE_RE = re.compile(r'\[voice\][ \t]*(https?://\S+)[ \t]*')
 
 # Marker the manager fills in on a 'wants to buy' card. Kept in sync with telegram.py / webhooks.py.
 PURCHASE_PLACEHOLDER = "{ответ пользователя}"
@@ -178,12 +178,14 @@ def strip_voice_marker(text: str) -> str:
     them can open. If transcription failed and no words follow, fall back to a
     marker so the model still knows a voice message arrived.
     """
-    stripped = text.strip()
-    m = _VOICE_RE.match(stripped)
-    if not m:
+    if not _VOICE_RE.search(text):
         return text
-    rest = stripped[m.end():].strip()
-    return rest or "[клиент отправил голосовое сообщение, распознать не удалось]"
+    # History prefixes and buffered messages can contain several voice markers.
+    # Keep transcripts/speaker labels, never give a text model an audio URL.
+    def replace(match):
+        tail = text[match.end():].strip()
+        return "" if tail and not tail.startswith(('[voice]', '[клиент', '[менеджер', '[бот')) else "[клиент отправил голосовое сообщение, распознать не удалось] "
+    return _VOICE_RE.sub(replace, text).strip()
 
 
 def _annotate_dialogue(dialogue: list[dict]) -> list[dict]:
@@ -238,6 +240,11 @@ def generate_reply(
     use_sales_model: bool = False,
     model_override: str | None = None,
 ) -> AIResult:
+    for message in reversed(dialogue):
+        if message.get('role') == 'assistant':
+            break
+        if message.get('role') == 'user' and '[клиент отправил голосовое сообщение, распознать не удалось]' in strip_voice_marker(message.get('content', '')):
+            raise RuntimeError('Voice transcription unavailable; manager must listen to the original audio. Do not ask the client to repeat it as text.')
     _model = model_override or (settings.openai_model_sales if use_sales_model else settings.openai_model_simple)
     _in_cost = settings.openai_input_cost_sales if use_sales_model else settings.openai_input_cost_simple
     _out_cost = settings.openai_output_cost_sales if use_sales_model else settings.openai_output_cost_simple
@@ -434,7 +441,7 @@ def summarize_dialogue(dialogue: list[dict]) -> tuple[str, AIResult | None]:
         return "", None
     try:
         text = "\n".join(
-            f"{'Клиент' if m['role'] == 'user' else 'Бот'}: {str(m.get('content', ''))[:300]}"
+            f"{'Клиент' if m['role'] == 'user' else 'Бот'}: {strip_voice_marker(str(m.get('content', '')))[:300]}"
             for m in dialogue
         )
         t0 = perf_counter()
@@ -506,7 +513,7 @@ def detect_and_translate(client_message: str, ai_reply: str) -> dict[str, str | 
                     "Если русский: client=null, reply=null."
                 )},
                 {"role": "user", "content": (
-                    f"Сообщение клиента:\n{client_message[:600]}\n\n"
+                    f"Сообщение клиента:\n{strip_voice_marker(client_message)[:600]}\n\n"
                     f"Ответ бота:\n{ai_reply[:600]}"
                 )},
             ],
@@ -744,7 +751,7 @@ def extract_fields(dialogue: list[dict], contacts: str | None) -> AIResult:
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": EXTRACTOR_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps({"dialogue": dialogue, "contacts": contacts}, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps({"dialogue": _clean_dialogue(dialogue), "contacts": contacts}, ensure_ascii=False)},
         ],
     )
     latency_ms = int((perf_counter() - started) * 1000)
@@ -848,7 +855,7 @@ def translate_reply(original_reply: str, client_message: str, target_language: s
     )
     user = (
         f"Целевой язык: {language}\n\n"
-        f"Сообщение клиента для контекста:\n{client_message or '-'}\n\n"
+        f"Сообщение клиента для контекста:\n{strip_voice_marker(client_message) or '-'}\n\n"
         f"Ответ для перевода:\n{original_reply}"
     )
     response = _create_completion(
@@ -882,7 +889,7 @@ def explain_reply(client_message: str, reply: str, conversation_summary: str | N
         "какую цель преследовал ответ, почему задан этот вопрос или предложена консультация. "
         "Пиши просто и по делу, на русском. Без вступлений и заключений."
     )
-    user = f"Сообщение клиента:\n{client_message}\n\nМой ответ:\n{reply}"
+    user = f"Сообщение клиента:\n{strip_voice_marker(client_message)}\n\nМой ответ:\n{reply}"
     if conversation_summary:
         user = f"Контекст диалога:\n{conversation_summary}\n\n{user}"
     response = _create_completion(
@@ -929,7 +936,7 @@ def analyze_manager_corrections(examples: list[dict]) -> AIResult:
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps({"examples": examples}, ensure_ascii=False)},
+            {"role": "user", "content": json.dumps({"examples": [dict(e, client_message=strip_voice_marker(e.get('client_message', ''))) for e in examples]}, ensure_ascii=False)},
         ],
     )
     latency_ms = int((perf_counter() - started) * 1000)
@@ -976,7 +983,7 @@ def calibrate_prompt_from_single_reject(
     )
     user = json.dumps(
         {
-            "client_message": client_message,
+            "client_message": strip_voice_marker(client_message),
             "ai_reply": ai_reply,
             "reason": reason,
             "current_prompt": current_prompt,
@@ -1063,10 +1070,12 @@ def generate_purchase_template(dialogue: list[dict], client_message: str) -> tup
 
 def transcribe_voice(url: str) -> tuple[str, str]:
     """Download audio from URL and transcribe with Whisper. Returns (text, lang_code like 'ru'/'ky')."""
+    from urllib.parse import urlsplit
     if not settings.openai_api_key:
-        return "", "ru"
+        raise RuntimeError('Voice transcription provider is not configured')
     auth_headers: dict = {}
-    if settings.amocrm_access_token:
+    host = (urlsplit(url).hostname or '').lower()
+    if settings.amocrm_access_token and urlsplit(url).scheme == 'https' and (host == 'amocrm.ru' or host.endswith('.amocrm.ru')):
         auth_headers["Authorization"] = f"Bearer {settings.amocrm_access_token}"
     with httpx.Client(timeout=60, follow_redirects=True) as http:
         resp = http.get(url, headers=auth_headers)
@@ -1079,9 +1088,6 @@ def transcribe_voice(url: str) -> tuple[str, str]:
         model="whisper-1",
         file=(filename, io.BytesIO(audio_bytes)),
         response_format="verbose_json",
-        # Whisper often labels Kyrgyz recordings incorrectly because it is a
-        # lower-resource language.  A bilingual prompt improves recognition
-        # without forcing the language and breaking Russian messages.
         prompt="Кыргызча жана орусча сүйлөшүү. Кыргыз тилиндеги сөздөрдү так транскрипциялаңыз.",
     )
     text = (response.text or "").strip()

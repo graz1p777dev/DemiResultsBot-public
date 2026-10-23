@@ -173,8 +173,10 @@ def crm_incoming(body: CrmIncomingMessage, db: Session = Depends(get_db)) -> dic
                 transcribed = transcribe_audio_bytes(audio, "incoming.ogg")
             else:
                 transcribed, _language = transcribe_voice(voice_url)
-        except Exception:
+        except Exception as exc:
+            _log.warning('Incoming voice transcription failed type=%s', type(exc).__name__)
             transcribed = ""
+        incoming.raw = {**(incoming.raw or {}), 'voice_transcription': {'status': 'success' if transcribed else 'failed'}}
         incoming.text = f"[voice] {voice_url} {transcribed}".strip()
 
     if incoming.direction == "outgoing":

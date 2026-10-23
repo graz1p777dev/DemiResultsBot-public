@@ -117,6 +117,29 @@ def test_incoming_auth_storage_dedup_and_enqueue(flow):
         assert len(db.scalars(select(MessageBuffer)).all()) == 1
 
 
+def test_failed_voice_is_saved_and_goes_to_manual_review_without_customer_send(flow):
+    from app.services.openai_service import generate_reply
+    body = {'lead_id':'local-lead','client_id':'local-client','client_name':'Test',
+            'chat_id':'996000000000@c.us','message_id':'voice-failed','text':'',
+            'source':'whatsapp_green','timestamp':flow.day+'+06:00',
+            'attachment_type':'voice','attachment_link':'https://audio.invalid/voice.ogg'}
+    with patch.object(admin,'transcribe_voice',side_effect=RuntimeError('mock quota')):
+        response=flow.client.post('/admin/crm/incoming',json=body,headers={'X-Admin-API-Key':'local-test-key'})
+    assert response.status_code==200 and response.json()['queued']
+    with patch.object(pipeline,'generate_reply',side_effect=generate_reply.__wrapped__):
+        process(flow,'voice-failed')
+    with flow.sessions() as db:
+        message=db.scalar(select(Message).where(Message.direction=='incoming'))
+        assert message.media_url==body['attachment_link']
+        assert message.raw_payload['voice_transcription']['status']=='failed'
+        card=db.scalar(select(ApprovalRequest))
+        assert card.status=='pending' and card.ai_reply==''
+        assert 'manager must listen' in card.extracted_fields['_ai_error']
+        assert len(flow.cards)==1
+        assert db.scalar(select(MessageBuffer)).processed
+    assert flow.sent==[]
+
+
 def test_day_creates_telegram_draft_never_autosends_even_if_env_disabled(flow):
     incoming(flow)
     process(flow)
