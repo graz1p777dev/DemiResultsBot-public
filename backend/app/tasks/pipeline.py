@@ -1678,7 +1678,8 @@ def _update_card_or_notify(
         pass
 
 
-def approve_request(db, approval_id: int, manager_id: str) -> bool:
+def approve_request(db, approval_id: int, manager_id: str, *,
+    expected_reply: str | None = None, check_snapshot: bool = False) -> bool:
     approval = db.get(ApprovalRequest, approval_id)
     if not approval or approval.status not in {"pending", "edited"}:
         return False
@@ -1702,10 +1703,13 @@ def approve_request(db, approval_id: int, manager_id: str) -> bool:
     if not latest_user_message or not split_outgoing_messages(approval.edited_reply if approval.edited_reply is not None else approval.ai_reply):
         return False
 
-    claimed = db.execute(update(ApprovalRequest).where(
+    claim = update(ApprovalRequest).where(
         ApprovalRequest.id == approval_id,
         ApprovalRequest.status.in_(("pending", "edited")),
-    ).values(status="approved", manager_telegram_id=manager_id,
+    )
+    if check_snapshot:
+        claim = claim.where(ApprovalRequest.edited_reply == expected_reply)
+    claimed = db.execute(claim.values(status="approved", manager_telegram_id=manager_id,
              approved_at=datetime.now(ZoneInfo(settings.timezone))))
     if claimed.rowcount != 1:
         db.rollback()
@@ -1920,7 +1924,8 @@ def save_request(db, approval_id: int, manager_id: str) -> bool:
 
 
 def apply_edited_reply(db, approval_id: int, manager_id: str, text: str, *,
-    expected_reply: str | None = None, check_snapshot: bool = False) -> ApprovalRequest | None:
+    expected_reply: str | None = None, check_snapshot: bool = False,
+    expected_ai_reply: str | None = None) -> ApprovalRequest | None:
     approval = db.get(ApprovalRequest, approval_id)
     if not approval or approval.status not in {"pending", "edited"}:
         return None
@@ -1929,6 +1934,8 @@ def apply_edited_reply(db, approval_id: int, manager_id: str, text: str, *,
     )
     if check_snapshot:
         query = query.where(ApprovalRequest.edited_reply == expected_reply)
+        if expected_ai_reply is not None:
+            query = query.where(ApprovalRequest.ai_reply == expected_ai_reply)
     changed = db.execute(query.values(edited_reply=text, status="edited", manager_telegram_id=manager_id))
     if changed.rowcount != 1:
         db.rollback()

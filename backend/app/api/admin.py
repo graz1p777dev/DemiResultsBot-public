@@ -391,7 +391,6 @@ def get_chat_history(amocrm_lead_id: str, db: Session = Depends(get_db)) -> dict
             "message_type": "text",
         }
         for a in pending_approvals
-        if a.ai_reply and a.ai_reply.strip()
     ]
     rows.sort(key=lambda r: r["created_at"] or datetime.min.replace(tzinfo=ZoneInfo("UTC")))
     return {
@@ -579,6 +578,12 @@ class ApprovalEdit(BaseModel):
 
 class ApprovalAIEdit(BaseModel):
     prompt: str
+
+
+class ApprovalEditPreview(BaseModel):
+    reply: str = Field(max_length=10000)
+    prompt: str | None = Field(default=None, max_length=2000)
+    expected_current: str | None = Field(default=None, max_length=10000)
 
 
 class ApprovalReject(BaseModel):
@@ -1187,6 +1192,34 @@ def ai_edit_approval(
     return {"ok": True, "status": approval.status, "edited_reply": approval.edited_reply}
 
 
+@router.post('/approvals/{approval_id}/edit-preview')
+def preview_approval_edit(approval_id: int, body: ApprovalEditPreview,
+    request: Request, db: Session = Depends(get_db)) -> dict:
+    from app.services.telegram_edits import create_proposal
+    approval = db.get(ApprovalRequest, approval_id)
+    if not approval or approval.status not in {'pending', 'edited'}:
+        raise HTTPException(409, 'Карточка уже обработана')
+    if body.expected_current is not None and body.expected_current.strip() != (approval.edited_reply or approval.ai_reply or '').strip():
+        raise HTTPException(409, 'Ответ изменён другим сотрудником. Обновите диалог.')
+    try:
+        token, reply = create_proposal(db, approval, _crm_manager_id(request), 'crm',
+            body.reply.strip(), (body.prompt or '').strip() or None)
+    except ValueError:
+        raise HTTPException(400, 'Не удалось подготовить непустой ответ')
+    return {'ok': True, 'proposal_token': token, 'edited_reply': reply}
+
+
+@router.post('/approvals/{approval_id}/edit-preview/{token}/{decision}')
+def decide_approval_edit(approval_id: int, token: str, decision: str,
+    request: Request, db: Session = Depends(get_db)) -> dict:
+    from app.services.telegram_edits import confirm
+    if decision not in {'accept', 'discard'}:
+        raise HTTPException(404, 'Неизвестное действие')
+    if not confirm(db, token, _crm_manager_id(request), 'crm', decision == 'accept', approval_id):
+        raise HTTPException(409, 'Карточка изменилась или правка уже обработана')
+    return {'ok': True, 'status': 'sent' if decision == 'accept' else 'discarded'}
+
+
 @router.post("/approvals/{approval_id}/approve")
 def approve_from_crm(
     approval_id: int,
@@ -1520,17 +1553,14 @@ def ai_test(body: AiTestRequest, db: Session = Depends(get_db)) -> dict:
 @router.post("/ai-test/transcribe")
 async def ai_test_transcribe(file: UploadFile = File(...)) -> dict:
     """Transcribe an uploaded voice message (for the CRM tester)."""
-    from app.services.openai_service import _client
     data = await file.read()
     if not data:
         raise HTTPException(400, "empty file")
-    buf = io.BytesIO(data)
-    buf.name = file.filename or "voice.ogg"
     try:
-        tr = _client().audio.transcriptions.create(model="whisper-1", file=buf)
-        return {"ok": True, "text": (tr.text or "").strip()}
+        return {"ok": True, "text": transcribe_audio_bytes(data, file.filename or 'voice.ogg')}
     except Exception as e:
-        return {"ok": False, "text": "", "error": str(e)}
+        _log.warning('ASR tester failed type=%s', type(e).__name__)
+        return {"ok": False, "text": "", "error": 'Не удалось распознать аудио'}
 
 
 # ─── Лента действий бота (терминал в AI-лаборатории) ─────────────────────────
@@ -1832,10 +1862,7 @@ async def lab_test_user_voice(lead_pk: int, file: UploadFile = File(...), db: Se
 
     transcript = ""
     try:
-        from app.services.openai_service import _client
-        audio = io.BytesIO(content)
-        audio.name = file.filename or f"voice{suffix}"
-        transcript = (_client().audio.transcriptions.create(model="whisper-1", file=audio).text or "").strip()
+        transcript = transcribe_audio_bytes(content, file.filename or f'voice{suffix}')
     except Exception:
         # The note still reaches the CRM and can be played. Empty transcript is
         # handled by the existing non-recognition flow in the AI pipeline.

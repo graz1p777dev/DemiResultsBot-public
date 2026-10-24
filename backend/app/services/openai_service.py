@@ -82,7 +82,7 @@ def _pooled_client(provider: str, api_key: str) -> OpenAI:
     cached = getattr(_clients, provider, None)
     if cached and cached[0] == pid and cached[1] == api_key and not cached[2].is_closed():
         return cached[2]
-    client = (_QuotaAwareOpenAI(api_key=api_key) if provider == 'openai'
+    client = (_QuotaAwareOpenAI(api_key=api_key) if provider in {'openai', 'asr'}
               else OpenAI(api_key=api_key, base_url='https://api.deepseek.com/v1'))
     if cached and cached[0] == pid:
         cached[2].close()
@@ -1112,9 +1112,9 @@ def generate_purchase_template(dialogue: list[dict], client_message: str) -> tup
 
 
 def transcribe_voice(url: str) -> tuple[str, str]:
-    """Download audio from URL and transcribe with Whisper. Returns (text, lang_code like 'ru'/'ky')."""
+    """Download a recording and transcribe its original Russian/Kyrgyz speech."""
     from urllib.parse import urlsplit
-    if not settings.openai_api_key:
+    if not (getattr(settings, 'openai_asr_api_key', '') or settings.openai_api_key):
         raise RuntimeError('Voice transcription provider is not configured')
     auth_headers: dict = {}
     host = (urlsplit(url).hostname or '').lower()
@@ -1127,31 +1127,35 @@ def transcribe_voice(url: str) -> tuple[str, str]:
     filename = url.split("?")[0].rstrip("/").split("/")[-1] or "voice.ogg"
     if not any(filename.endswith(ext) for ext in (".mp3", ".mp4", ".ogg", ".wav", ".m4a", ".webm", ".mpeg", ".mpga")):
         filename = "voice.ogg"
-    response = _client().audio.transcriptions.create(
-        model="whisper-1",
-        file=(filename, io.BytesIO(audio_bytes)),
-        response_format="verbose_json",
-        prompt="Кыргызча жана орусча сүйлөшүү. Кыргыз тилиндеги сөздөрдү так транскрипциялаңыз.",
-    )
-    text = (response.text or "").strip()
-    lang = (getattr(response, "language", None) or "ru").lower()
-    _lang_map = {"russian": "ru", "kyrgyz": "ky", "english": "en", "uzbek": "uz", "kazakh": "kk"}
-    lang = _lang_map.get(lang, lang[:2])
-    return text, lang
+    return _transcribe_recording(audio_bytes, filename)
 
 
 def transcribe_audio_bytes(audio_bytes: bytes, filename: str = "dictation.webm") -> str:
-    """Transcribe a browser recording for CRM text dictation."""
-    if not settings.openai_api_key:
+    """One ASR path for WhatsApp recordings, Telegram instructions and CRM."""
+    return _transcribe_recording(audio_bytes, filename)[0]
+
+
+def _transcribe_recording(audio_bytes: bytes, filename: str) -> tuple[str, str]:
+    key = getattr(settings, 'openai_asr_api_key', '') or settings.openai_api_key
+    if not key:
         raise RuntimeError("OpenAI API key is not configured")
+    if not audio_bytes or len(audio_bytes) > 25 * 1024 * 1024:
+        raise ValueError('Audio must contain between 1 byte and 25 MB')
     audio = io.BytesIO(audio_bytes)
     audio.name = filename
-    response = _client().audio.transcriptions.create(
-        model="gpt-4o-mini-transcribe",
+    # Do not force one language: a recording can switch between Russian and
+    # Kyrgyz. Some providers reject ky hints even though auto-detection works.
+    client = _pooled_client('asr', key) if getattr(settings, 'openai_asr_api_key', '') else _client()
+    response = client.audio.transcriptions.create(
+        model=getattr(settings, 'openai_asr_model', 'gpt-transcribe'),
         file=audio,
+        response_format='json',
         prompt=(
-            "Диктовка сотрудника CRM Demi Results. Точно распознай русский или кыргызский текст, "
-            "названия косметики, имена и номера телефонов. Верни только расшифровку."
+            "Орусча жана кыргызча сүйлөшүү. Запишите только реально произнесённые "
+            "слова на исходном русском или кыргызском языке, без перевода и дополнений."
         ),
     )
-    return (response.text or "").strip()
+    languages = getattr(response, 'languages', None) or []
+    first = languages[0] if languages else None
+    language = (first.get('code', '') if isinstance(first, dict) else getattr(first, 'code', '')) if first else ''
+    return (response.text or '').strip(), language

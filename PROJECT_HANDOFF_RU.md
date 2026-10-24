@@ -1,6 +1,8 @@
 # DemiResults: актуальная передача другому Codex
 
-Срез на **23 октября 2026, Asia/Bishkek**. Этот файл — актуальная стартовая инструкция. Старые отчёты читать с учётом последующих исправлений, не выдавать исторические результаты за сегодняшнюю проверку.
+Срез на **24 октября 2026, Asia/Bishkek**. Этот файл — актуальная стартовая инструкция. Старые отчёты читать с учётом последующих исправлений, не выдавать исторические результаты за сегодняшнюю проверку.
+
+**Обновление 24.10:** [VOICE_APPROVALS_20261024.md](VOICE_APPROVALS_20261024.md). Новый ключ проверен и подключён отдельно для ASR; исходная запись распознана через `gpt-transcribe`. Telegram упрощён, добавлены reply-bound text/voice previews и подтверждение; CRM переведена на non-mutating preview/accept/discard. Production обновлён. Полные тесты владелец отложил; ниже сведения от 23.10 про непроверенный ключ/блокировку ASR — исторические, не актуальный статус.
 
 ## Цель владельца
 
@@ -55,7 +57,7 @@ Outbox/reservation, recovery, Telegram update dedup/TTL и fencing реализ�
 
 Часть реальных browser-сценариев на отдельной QA-базе описана в [BROWSER_QA_RU.md](BROWSER_QA_RU.md): auth владельца/сотрудника, lifecycle сотрудника, consultation CRUD, часть финансового CRUD и отказ по правам. Полная матрица ролей/финансов/HR/мобильных сценариев не закрыта.
 
-## Голосовые — первоочередная незавершённая задача
+## История голосовых на 23.10 — актуальное обновление выше
 
 Исправлено на production 23.10.2026:
 
@@ -84,8 +86,8 @@ Outbox/reservation, recovery, Telegram update dedup/TTL и fencing реализ�
 При последней сверке production source/runtime:
 
 ```text
-ca2de83c4d552dbe334f5ad3c39bb43643f907e7c7284fbb7b08a4a15d2cad76  services/openai_service.py
-a0e09b03f6dd6d2ad813ca776fe83cae0c60a80bb1188ebda7a8e02b2eeaceed  tasks/pipeline.py
+0b3011138033ce1184e0707d19b33de313bf07c4863acb9b1a839c7d4f297829  services/openai_service.py
+63ec4ec8981dceff17b4345d892f5bf80115f50f36be2c4d25e2446b4ebb1711  tasks/pipeline.py
 ```
 
 Исходная приватная snapshot-копия: 179 backend tests + 16 subtests. Текущая continuation-копия после quota и connection reuse fix: 209 passed + 16 subtests. Провайдеры mocked; успешный voice live-gate этим не подтверждён. Команды и переносимый offline PG/Redis/Celery QA — в README.md, TESTING_RU.md и qa/README.md. Не загружать production env в pytest/build/QA-браузер.

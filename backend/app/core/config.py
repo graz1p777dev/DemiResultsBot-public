@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     message_buffer_seconds: int = 10
 
     openai_api_key: str = ""
+    openai_asr_api_key: str = ""
+    openai_asr_model: str = "gpt-transcribe"
     openai_model: str = "gpt-4.1-mini"
     openai_extractor_model: str = "gpt-4.1-mini"
     # Two-tier reply model routing: simple questions vs active sales/objections

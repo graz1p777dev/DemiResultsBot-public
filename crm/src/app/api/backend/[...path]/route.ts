@@ -57,6 +57,8 @@ const RULES: Rule[] = [
   { methods: ["GET"], pattern: /^admin\/approvals$/, roles: STAFF, resources: ["approvals"], action: "view" },
   { methods: ["PATCH"], pattern: /^admin\/approvals\/\d+$/, roles: STAFF, resources: ["approvals"], action: "edit" },
   { methods: ["POST"], pattern: /^admin\/approvals\/\d+\/(approve|reject|ai-edit)$/, roles: STAFF, resources: ["approvals"], action: "edit" },
+  { methods: ["POST"], pattern: /^admin\/approvals\/\d+\/edit-preview$/, roles: STAFF, resources: ["approvals"], action: "edit" },
+  { methods: ["POST"], pattern: /^admin\/approvals\/\d+\/edit-preview\/[a-f0-9]{24}\/(accept|discard)$/, roles: STAFF, resources: ["approvals"], action: "edit" },
 
   // Рейтинг баллов отображается на общем дашборде. Это только агрегированные
   // счётчики действий сотрудников, без диалогов, токенов и настроек бота.

@@ -5,6 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import desc, select, update as sql_update
 from sqlalchemy.orm import Session
 
@@ -37,7 +38,6 @@ from app.tasks.pipeline import (
     set_ai_edit_session,
     set_claim,
     set_edit_prompt_msg,
-    set_edit_session,
     set_note_session,
     set_purchase_answer_session,
     set_purchase_edit_session,
@@ -244,6 +244,13 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
             return {"ok": False, "error": "invalid_callback"}
         action, raw_id = data.split(":", 1)
 
+        if action in {'edit_accept', 'edit_discard'}:
+            from app.services.telegram_edits import confirm
+            ok = confirm(db, raw_id, manager_id, callback_chat_id, action == 'edit_accept')
+            label = ('Отправлено' if action == 'edit_accept' else 'Правка отклонена') if ok else 'Карточка изменилась или правка уже обработана'
+            telegram.answer_callback(callback_id, label)
+            return {'ok': ok, 'action': action}
+
         # set_stage carries two IDs: "approval_id:stage_id"
         if action == "set_stage":
             approval_id_str, stage_id_str = raw_id.split(":", 1)
@@ -352,11 +359,9 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
             telegram.answer_callback(callback_id, "Отправлено" if ok else "Не удалось отправить")
             return {"ok": ok, "action": action}
         if action == "reject":
-            # Every reject now needs a reason — it's the only signal reject_request()
-            # has to save a TrainingExample / feed aggressive-mode auto-calibration.
-            telegram.answer_callback(callback_id)
-            telegram.send_reject_reason_menu(callback_chat_id or manager_id, approval_id)
-            return {"ok": True, "action": action}
+            ok = reject_request(db, approval_id, manager_id, 'Отклонено сотрудником')
+            telegram.answer_callback(callback_id, 'Отклонено' if ok else 'Уже обработано')
+            return {"ok": ok, "action": action}
         if action == "save":
             ok = save_request(db, approval_id, manager_id)
             telegram.answer_callback(callback_id, "Сохранено в /no-sorted")
@@ -399,28 +404,11 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
             telegram.answer_callback(callback_id, "Отменено")
             return {"ok": True, "action": action}
         if action == "edit":
-            set_edit_session(db, manager_id, approval_id)
-            manager_name = _load_manager_name(db, manager_id)
-            set_claim(db, approval_id, manager_id, manager_name)
-            has_templates = bool(_load_templates(db))
-            if approval and lead:
-                telegram.edit_approval_card(approval, lead, claimed_by_name=manager_name, has_templates=has_templates)
-            telegram.answer_callback(callback_id)
-            prompt_text = f"✏️ Редакт вручную №{approval_id:07d}\n\nОтправьте новый текст ответа."
-            resp2: dict = {}
-            try:
-                resp2 = telegram.send_text(manager_id, prompt_text)
-            except Exception:
-                pass
-            if not resp2.get("result"):
-                try:
-                    resp2 = telegram.send_text(callback_chat_id, prompt_text)
-                except Exception:
-                    pass
-            mid = resp2.get("result", {}).get("message_id")
-            if mid:
-                set_edit_prompt_msg(db, manager_id, mid)
-            return {"ok": True, "action": action}
+            from app.services.telegram_edits import prompt_edit
+            ok = prompt_edit(db, approval, manager_id, callback_chat_id,
+                callback.get('message', {}).get('message_id'))
+            telegram.answer_callback(callback_id, '' if ok else 'Ответ уже обработан')
+            return {'ok': ok, 'action': action}
         if action == "pedit":
             # Purchase card «Редактировать»: manager writes the full reply, then it is sent.
             set_purchase_edit_session(db, manager_id, approval_id)
@@ -632,6 +620,19 @@ async def telegram_webhook(secret: str, request: Request, db: Session = Depends(
         db_manager_ids = _load_db_manager_ids(db)
         if not telegram.is_authorized_manager(manager_id, message_chat_id, extra_allowed=db_manager_ids):
             return {"ok": False, "error": "unauthorized_manager"}
+        if message.get('reply_to_message'):
+            from app.services.telegram_edits import prepare_reply
+            try:
+                result = await run_in_threadpool(prepare_reply, db, message, manager_id, message_chat_id)
+            except Exception as exc:
+                db.rollback()
+                _log.warning('Telegram edit preview failed type=%s', type(exc).__name__)
+                telegram.send_text(message_chat_id, 'Не удалось подготовить правку. Исходный ответ не изменён. Повторите ответ на карточку текстом или голосом.')
+                return {'ok': False, 'error': 'edit_preview_failed'}
+            if result is not None:
+                return result
+            # Do not consume an unrelated lead's legacy edit session.
+            return {'ok': True, 'action': 'reply_not_bound'}
         # Non-text message (sticker/photo/voice) must not consume pending edit sessions
         if not text:
             return {"ok": True, "action": "ignored_non_text"}

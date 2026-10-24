@@ -55,6 +55,8 @@ type ChatData = {
   messages: ChatMessage[]
 }
 type ReplyOption = { approach: string; text: string }
+type ApprovalProposal = { id: number; token: string; text: string }
+type ApprovalPreview = { ok: true; proposal_token: string; edited_reply: string }
 
 function fmt(iso: string | null) {
   if (!iso) return ''
@@ -99,9 +101,15 @@ export default function DialogsPage() {
   const [aiEditingId, setAiEditingId] = useState<number | null>(null)
   const [aiPromptApprovalId, setAiPromptApprovalId] = useState<number | null>(null)
   const [aiEditPrompt, setAiEditPrompt] = useState('')
+  const [approvalEdit, setApprovalEdit] = useState<{ id: number; original: string; text: string } | null>(null)
+  const [approvalProposal, setApprovalProposal] = useState<ApprovalProposal | null>(null)
+  const proposalRef = useRef<ApprovalProposal | null>(null)
+  const [discardingApprovalId, setDiscardingApprovalId] = useState<number | null>(null)
   const [generatingReply, setGeneratingReply] = useState(false)
   const [generationStatus, setGenerationStatus] = useState<string | null>(null)
   const [actionStatus, setActionStatus] = useState<string | null>(null)
+  const [linkState, setLinkState] = useState<'loading' | 'error' | null>(null)
+  const [linkRetry, setLinkRetry] = useState(0)
   const [clientCardOpen, setClientCardOpen] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantInstruction, setAssistantInstruction] = useState('')
@@ -132,6 +140,9 @@ export default function DialogsPage() {
   const recorderRef = useRef<MediaRecorder | null>(null)
   const recorderChunksRef = useRef<Blob[]>([])
   const [recording, setRecording] = useState(false)
+  const [recordedVoice, setRecordedVoice] = useState<File | null>(null)
+  const [recordedVoiceUrl, setRecordedVoiceUrl] = useState<string | null>(null)
+  const activeConversationRef = useRef<number | null>(null)
   const dictationRecorderRef = useRef<MediaRecorder | null>(null)
   const dictationChunksRef = useRef<Blob[]>([])
   const dictationTargetRef = useRef<string | null>(null)
@@ -210,73 +221,111 @@ export default function DialogsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasMore, loading, loadingMore, convs.length])
 
+  const invalidateProposal = () => {
+    const previous = proposalRef.current
+    proposalRef.current = null
+    setApprovalProposal(null)
+    if (previous) {
+      void botJson(`/admin/approvals/${previous.id}/edit-preview/${encodeURIComponent(previous.token)}/discard`, 'POST').catch(() => undefined)
+    }
+  }
+
+  useEffect(() => () => {
+    const proposal = proposalRef.current
+    proposalRef.current = null
+    if (proposal) void botJson(`/admin/approvals/${proposal.id}/edit-preview/${encodeURIComponent(proposal.token)}/discard`, 'POST').catch(() => undefined)
+  }, [])
+
   const openChat = (c: Conversation) => {
     const params = new URLSearchParams(searchParams.toString())
-    if (c.meta?.clientId) params.set('client', c.meta.clientId)
-    else params.set('conversation', String(c.id))
-    params.delete('lead')
-    if (c.meta?.clientId) params.delete('conversation')
+    // Keep the exact external lead: a client can have several dialogs/deals.
+    params.set('lead', String(c.amocrm_lead_id))
+    params.delete('client')
+    params.delete('conversation')
     router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+    if (activeConversationRef.current !== c.id) {
+      invalidateProposal()
+      setApprovalEdit(null)
+      setAiEditPrompt('')
+      setAiPromptApprovalId(null)
+      setRecordedVoice(null)
+      setActionStatus(null)
+      setGenerationStatus(null)
+    }
+    activeConversationRef.current = c.id
+    setLinkState(null)
     setSelected(c)
+    setChat(null)
     setDraft(c.draft_text || '')
     setConvs(prev => prev.map(item => item.id === c.id ? { ...item, unread_count: 0 } : item))
     setChatLoading(true)
     botGet<ChatData>(`/admin/chat/${c.amocrm_lead_id}`)
-      .then(setChat)
-      .catch(() => setChat(null))
-      .finally(() => setChatLoading(false))
+      .then(data => { if (activeConversationRef.current === c.id) setChat(data) })
+      .catch(() => { if (activeConversationRef.current === c.id) setChat(null) })
+      .finally(() => { if (activeConversationRef.current === c.id) setChatLoading(false) })
   }
 
   const closeChat = () => {
+    invalidateProposal()
     const params = new URLSearchParams(searchParams.toString())
     params.delete('lead')
     params.delete('client')
     params.delete('conversation')
     const suffix = params.toString()
     router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false })
+    activeConversationRef.current = null
+    setRecordedVoice(null)
+    setLinkState(null)
     setSelected(null)
     setChat(null)
   }
 
-  // Deals link here with ?lead=… so the manager lands in the full Inbox chat,
-  // rather than opening the compact deal sheet over Kanban.
+  // Telegram/deal links use an external lead ID, never a CRM dialog/client UUID.
   useEffect(() => {
-    if (!requestedLead || selected) return
-    const loaded = convs.find(item => item.amocrm_lead_id === requestedLead)
-    if (loaded) {
-      openChat(loaded)
-      return
+    if (!requestedLead && !requestedClient && !requestedConversation) return
+    if (requestedLead && String(selected?.amocrm_lead_id) === requestedLead) return
+    if (!requestedLead && requestedClient && selected?.meta?.clientId === requestedClient) return
+    if (!requestedLead && !requestedClient && String(selected?.id) === requestedConversation) return
+    let cancelled = false
+    invalidateProposal()
+    activeConversationRef.current = null
+    setSelected(null)
+    setChat(null)
+    setRecordedVoice(null)
+    setLinkState('loading')
+    const resolve = async () => {
+      const loaded = requestedLead
+        ? convs.find(item => String(item.amocrm_lead_id) === requestedLead)
+        : requestedClient
+          ? convs.find(item => item.meta?.clientId === requestedClient)
+          : convs.find(item => String(item.id) === requestedConversation)
+      if (loaded) { if (!cancelled) openChat(loaded); return }
+      let leadId = requestedLead
+      if (!leadId && requestedClient) {
+        const response = await fetch(`/api/crm/dialogs/resolve?client=${encodeURIComponent(requestedClient)}`, { cache: 'no-store' })
+        if (!response.ok) throw new Error('Диалог клиента не найден')
+        leadId = (await response.json() as { botLeadId: string }).botLeadId
+      }
+      if (!leadId) {
+        if (loading) return
+        throw new Error('Диалог не найден')
+      }
+      const conversation = await botGet<Conversation>(`/admin/conversations/by-lead/${encodeURIComponent(leadId)}`)
+      if (String(conversation.amocrm_lead_id) !== String(leadId)) throw new Error('Диалог не найден')
+      // Metadata is optional; its availability must not change the resolved lead.
+      try {
+        const response = await fetch(`/api/crm/dialogs/meta?leads=${encodeURIComponent(leadId)}`, { cache: 'no-store' })
+        if (response.ok) {
+          const payload = await response.json() as { items: DialogMeta[] }
+          conversation.meta = payload.items.find(item => String(item.leadId) === String(leadId))
+        }
+      } catch { /* The chat can still open without the client panel. */ }
+      if (!cancelled) openChat(conversation)
     }
-    // Resolve by the exact bot lead, not by the displayed phone number or a
-    // filtered Inbox search. This opens a deal even when its chat is not in
-    // the first page or is temporarily hidden by an Inbox filter.
-    void botGet<Conversation>(`/admin/conversations/by-lead/${encodeURIComponent(requestedLead)}`)
-      .then(openChat)
-      .catch(() => undefined)
+    void resolve().catch(() => { if (!cancelled) setLinkState('error') })
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedLead, convs, selected])
-
-  useEffect(() => {
-    if (!requestedClient || selected) return
-    const loaded = convs.find(item => item.meta?.clientId === requestedClient)
-    if (loaded) { openChat(loaded); return }
-    void fetch(`/api/crm/dialogs/resolve?client=${encodeURIComponent(requestedClient)}`, { cache: 'no-store' })
-      .then(async response => response.ok ? response.json() as Promise<{ botLeadId: string }> : Promise.reject())
-      .then(async ({ botLeadId }) => {
-        const conversation = await botGet<Conversation>(`/admin/conversations/by-lead/${encodeURIComponent(botLeadId)}`)
-        const metaResponse = await fetch(`/api/crm/dialogs/meta?leads=${encodeURIComponent(botLeadId)}`, { cache: 'no-store' })
-        const metaPayload = metaResponse.ok ? await metaResponse.json() as { items: DialogMeta[] } : { items: [] }
-        openChat({ ...conversation, meta: metaPayload.items[0] })
-      }).catch(() => undefined)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedClient, convs, selected])
-
-  useEffect(() => {
-    if (!requestedConversation || loading || selected) return
-    const match = convs.find(item => String(item.id) === requestedConversation)
-    if (match) openChat(match)
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedConversation, loading, convs, selected])
+  }, [requestedLead, requestedClient, requestedConversation, convs, loading, linkRetry])
 
   useEffect(() => { bottomRef.current?.scrollIntoView() }, [chat])
 
@@ -286,7 +335,8 @@ export default function DialogsPage() {
   useEffect(() => {
     if (!selected) return
     const refreshChat = () => {
-      void botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(setChat).catch(() => undefined)
+      void botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`)
+        .then(data => { if (activeConversationRef.current === selected.id) setChat(data) }).catch(() => undefined)
     }
     const timer = window.setInterval(refreshChat, 3000)
     return () => window.clearInterval(timer)
@@ -322,6 +372,7 @@ export default function DialogsPage() {
   const refreshAfterManagerSend = (conversation: Conversation) => {
     const next = { ...conversation, ai_enabled: false }
     setConvs(current => current.map(item => item.id === conversation.id ? next : item))
+    if (activeConversationRef.current !== conversation.id) return
     if (conversation.ai_enabled) setActionStatus('ИИ-бот отключён, так как вы начали общение с клиентом.')
     openChat(next)
   }
@@ -331,7 +382,7 @@ export default function DialogsPage() {
     setSending(true)
     try {
       await botJson(`/admin/leads/${selected.id}/messages`, 'POST', { text: draft.trim() })
-      setDraft('')
+      if (activeConversationRef.current === selected.id) setDraft('')
       refreshAfterManagerSend(selected)
     } catch {
       alert('Не удалось отправить')
@@ -349,6 +400,7 @@ export default function DialogsPage() {
       for (let attempt = 0; attempt < 20; attempt += 1) {
         await new Promise(resolve => window.setTimeout(resolve, 1200))
         const refreshed = await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`)
+        if (activeConversationRef.current !== selected.id) return
         setChat(refreshed)
         if (refreshed.messages.some(message => message.status === 'pending_review' && message.approval_id)) {
           setGenerationStatus('Ответ готов. Проверьте его ниже и примите или отмените.')
@@ -362,6 +414,7 @@ export default function DialogsPage() {
       // approval already exists. Load it instead of showing a dead-end error.
       try {
         const refreshed = await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`)
+        if (activeConversationRef.current !== selected.id) return
         setChat(refreshed)
         if (refreshed.messages.some(message => message.status === 'pending_review' && message.approval_id)) {
           setGenerationStatus('Ответ уже готов к согласованию. Проверьте его ниже и примите или отмените.')
@@ -407,6 +460,7 @@ export default function DialogsPage() {
       form.set('file', file)
       const response = await fetch(`/api/backend/admin/leads/${selected.id}/media`, { method: 'POST', body: form })
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail || 'Не удалось отправить файл')
+      setRecordedVoice(current => current === file ? null : current)
       refreshAfterManagerSend(selected)
     } catch (error) {
       alert(error instanceof Error ? error.message : 'Не удалось отправить файл')
@@ -414,6 +468,7 @@ export default function DialogsPage() {
   }
 
   const toggleRecording = async () => {
+    if (!selected) return
     if (dictationTarget) {
       alert('Сначала остановите диктовку текста')
       return
@@ -423,7 +478,9 @@ export default function DialogsPage() {
       return
     }
     try {
+      const conversationId = selected.id
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (activeConversationRef.current !== conversationId) { stream.getTracks().forEach(track => track.stop()); return }
       const mimeType = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type)) || ''
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
       recorderChunksRef.current = []
@@ -434,7 +491,9 @@ export default function DialogsPage() {
         const recordedType = (recorder.mimeType || 'audio/webm').split(';')[0]
         const extension = recordedType === 'audio/mp4' ? 'm4a' : recordedType === 'audio/ogg' ? 'ogg' : 'webm'
         const blob = new Blob(recorderChunksRef.current, { type: recordedType })
-        void sendMedia(new File([blob], `voice-${Date.now()}.${extension}`, { type: recordedType }))
+        if (blob.size && activeConversationRef.current === conversationId) {
+          setRecordedVoice(new File([blob], `voice-${Date.now()}.${extension}`, { type: recordedType }))
+        }
       }
       recorderRef.current = recorder
       recorder.start()
@@ -442,16 +501,31 @@ export default function DialogsPage() {
     } catch { alert('Не удалось получить доступ к микрофону') }
   }
 
+  useEffect(() => {
+    if (!recordedVoice) { setRecordedVoiceUrl(null); return }
+    const url = URL.createObjectURL(recordedVoice)
+    setRecordedVoiceUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [recordedVoice])
+
+  useEffect(() => () => {
+    for (const recorder of [recorderRef.current, dictationRecorderRef.current]) {
+      if (recorder?.state === 'recording') recorder.stop()
+      recorder?.stream.getTracks().forEach(track => track.stop())
+    }
+  }, [selected?.id])
+
   const appendDictation = (target: string, text: string) => {
     if (target === 'draft') setDraft(current => `${current} ${text}`.trim())
     if (target === 'assistant') setAssistantInstruction(current => `${current} ${text}`.trim())
     if (target.startsWith('approval:')) {
-      setAiPromptApprovalId(Number(target.slice('approval:'.length)))
-      setAiEditPrompt(current => `${current} ${text}`.trim())
+      const approvalId = Number(target.slice('approval:'.length))
+      if (aiPromptApprovalId === approvalId) setAiEditPrompt(current => `${current} ${text}`.trim().slice(0, 2000))
     }
   }
 
   const toggleDictation = async (target: string) => {
+    if (!selected || transcribingTarget) return
     if (dictationTarget) {
       if (dictationTarget === target) dictationRecorderRef.current?.stop()
       return
@@ -461,7 +535,9 @@ export default function DialogsPage() {
       return
     }
     try {
+      const conversationId = selected.id
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (activeConversationRef.current !== conversationId) { stream.getTracks().forEach(track => track.stop()); return }
       const mimeType = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/ogg;codecs=opus'].find(type => MediaRecorder.isTypeSupported(type)) || ''
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
       dictationChunksRef.current = []
@@ -472,7 +548,7 @@ export default function DialogsPage() {
         const stoppedTarget = dictationTargetRef.current
         dictationTargetRef.current = null
         setDictationTarget(null)
-        if (!stoppedTarget) return
+        if (!stoppedTarget || activeConversationRef.current !== conversationId) return
         const recordedType = (recorder.mimeType || 'audio/webm').split(';')[0]
         const extension = recordedType === 'audio/mp4' ? 'm4a' : recordedType === 'audio/ogg' ? 'ogg' : 'webm'
         const blob = new Blob(dictationChunksRef.current, { type: recordedType })
@@ -484,7 +560,7 @@ export default function DialogsPage() {
           const response = await fetch('/api/backend/admin/transcribe', { method: 'POST', body: form })
           const payload = await response.json().catch(() => null) as { text?: string; detail?: string } | null
           if (!response.ok || !payload?.text) throw new Error(payload?.detail || 'Не удалось распознать запись')
-          appendDictation(stoppedTarget, payload.text)
+          if (activeConversationRef.current === conversationId) appendDictation(stoppedTarget, payload.text)
         } catch (error) {
           alert(error instanceof Error ? error.message : 'Не удалось распознать запись')
         } finally {
@@ -505,7 +581,7 @@ export default function DialogsPage() {
     return <button
       type="button"
       onClick={() => void toggleDictation(target)}
-      disabled={Boolean(transcribingTarget) || (Boolean(dictationTarget) && !active)}
+      disabled={Boolean(transcribingTarget) || (Boolean(dictationTarget) && !active) || recording || aiEditingId !== null || decidingApprovalId !== null || discardingApprovalId !== null}
       title={active ? 'Остановить и распознать' : title}
       aria-label={active ? 'Остановить и распознать' : title}
       className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border transition-colors disabled:opacity-40 ${active ? 'animate-pulse border-red-200 bg-red-50 text-red-700' : 'border-[#dbe8ee] bg-[#eef5f9] text-[#0c4d6c] hover:bg-[#dcecf3]'}`}
@@ -513,24 +589,48 @@ export default function DialogsPage() {
   }
 
   const decideApproval = async (message: ChatMessage, decision: 'approve' | 'reject') => {
-    if (!selected || !message.approval_id || decidingApprovalId) return
+    if (!selected || !message.approval_id || decidingApprovalId || aiEditingId || discardingApprovalId || dictationTarget || transcribingTarget) return
+    const reply = approvalEdit?.id === message.approval_id ? approvalEdit.text.trim() : message.text.trim()
+    const expectedCurrent = approvalEdit?.id === message.approval_id ? approvalEdit.original : message.text
+    if (decision === 'approve' && !reply) return
     setDecidingApprovalId(message.approval_id)
     setDecisionKind(decision)
     setActionStatus(decision === 'approve' ? 'Отправляем ответ клиенту…' : 'Отменяем черновик — клиенту ничего не будет отправлено…')
     try {
       if (decision === 'approve') {
-        await botJson(`/admin/approvals/${message.approval_id}/approve`, 'POST', { reply: message.text })
+        let proposal = proposalRef.current
+        if (proposal?.id !== message.approval_id || proposal.text !== reply) {
+          invalidateProposal()
+          const preview = await botJson<ApprovalPreview>(`/admin/approvals/${message.approval_id}/edit-preview`, 'POST', { reply, expected_current: expectedCurrent })
+          if (!preview.proposal_token || preview.edited_reply !== reply) throw new Error('Предложенный текст изменился. Проверьте ответ и подтвердите заново.')
+          proposal = { id: message.approval_id, token: preview.proposal_token, text: preview.edited_reply }
+          if (activeConversationRef.current !== selected.id) {
+            void botJson(`/admin/approvals/${proposal.id}/edit-preview/${encodeURIComponent(proposal.token)}/discard`, 'POST').catch(() => undefined)
+            return
+          }
+          proposalRef.current = proposal
+          setApprovalProposal(proposal)
+        }
+        await botJson(`/admin/approvals/${proposal.id}/edit-preview/${encodeURIComponent(proposal.token)}/accept`, 'POST')
+        if (proposalRef.current?.token === proposal.token) { proposalRef.current = null; setApprovalProposal(null) }
       } else {
+        invalidateProposal()
         await botJson(`/admin/approvals/${message.approval_id}/reject`, 'POST', { reason: 'Отклонено менеджером в диалоге' })
       }
-      setActionStatus(decision === 'approve' ? 'Ответ отправлен клиенту.' : 'Черновик отменён. Клиенту ничего не отправлялось.')
-      await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(setChat)
+      if (activeConversationRef.current === selected.id) {
+        setApprovalEdit(null)
+        setAiEditPrompt('')
+        setAiPromptApprovalId(null)
+        setActionStatus(decision === 'approve' ? 'Ответ принят. Статус отправки появится в переписке.' : 'Черновик отклонён. Клиенту ничего не отправлялось.')
+      }
+      await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(data => { if (activeConversationRef.current === selected.id) setChat(data) })
     } catch (error) {
       // Refresh anyway: a network response can be lost after the backend has
       // already completed the action. The fresh state is more trustworthy
       // than an alert that leaves an old approval card on screen.
-      await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(setChat).catch(() => undefined)
-      setActionStatus(error instanceof Error ? error.message : 'Не удалось выполнить действие. Диалог обновлён — проверьте текущий статус.')
+      if (activeConversationRef.current === selected.id) invalidateProposal()
+      await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(data => { if (activeConversationRef.current === selected.id) setChat(data) }).catch(() => undefined)
+      if (activeConversationRef.current === selected.id) setActionStatus(error instanceof Error ? error.message : 'Не удалось выполнить действие. Диалог обновлён — проверьте текущий статус.')
     } finally {
       setDecidingApprovalId(null)
       setDecisionKind(null)
@@ -538,21 +638,49 @@ export default function DialogsPage() {
   }
 
   const editApprovalWithAi = async (message: ChatMessage) => {
-    if (!selected || !message.approval_id || aiEditingId || !aiEditPrompt.trim()) return
+    if (!selected || !message.approval_id || aiEditingId || decidingApprovalId || discardingApprovalId || dictationTarget || transcribingTarget || aiPromptApprovalId !== message.approval_id || !aiEditPrompt.trim()) return
+    if (approvalEdit?.id !== message.approval_id || !approvalEdit.text.trim()) return
     setAiEditingId(message.approval_id)
     setActionStatus('ИИ улучшает ответ…')
+    invalidateProposal()
     try {
-      await botJson(`/admin/approvals/${message.approval_id}/ai-edit`, 'POST', { prompt: aiEditPrompt.trim() })
-      setAiEditPrompt('')
-      setAiPromptApprovalId(null)
-      await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(setChat)
-      setActionStatus('Ответ ИИ обновлён. Проверьте его и примите или отмените.')
+      const result = await botJson<ApprovalPreview>(`/admin/approvals/${message.approval_id}/edit-preview`, 'POST', { reply: approvalEdit.text.trim(), prompt: aiEditPrompt.trim(), expected_current: approvalEdit.original })
+      if (!result.proposal_token || !result.edited_reply?.trim()) throw new Error('ИИ не вернул текст. Попробуйте ещё раз или отредактируйте вручную.')
+      if (activeConversationRef.current === selected.id) {
+        const proposal = { id: message.approval_id, token: result.proposal_token, text: result.edited_reply }
+        proposalRef.current = proposal
+        setApprovalProposal(proposal)
+        setApprovalEdit(current => current && current.id === message.approval_id ? { ...current, text: result.edited_reply } : current)
+        setAiEditPrompt('')
+        setActionStatus('Предложение ИИ готово. Проверьте текст перед подтверждением отправки.')
+      } else {
+        void botJson(`/admin/approvals/${message.approval_id}/edit-preview/${encodeURIComponent(result.proposal_token)}/discard`, 'POST').catch(() => undefined)
+      }
     } catch (error) {
-      await botGet<ChatData>(`/admin/chat/${selected.amocrm_lead_id}`).then(setChat).catch(() => undefined)
-      setActionStatus(error instanceof Error ? error.message : 'Не удалось улучшить ответ. Диалог обновлён — проверьте текущий статус.')
+      if (activeConversationRef.current === selected.id) setActionStatus(error instanceof Error ? error.message : 'Не удалось улучшить ответ. Можно отредактировать его вручную.')
     } finally {
       setAiEditingId(null)
     }
+  }
+
+  const discardApprovalEdit = async () => {
+    if (!selected || !approvalEdit || decidingApprovalId || aiEditingId || discardingApprovalId || dictationTarget || transcribingTarget) return
+    const proposal = proposalRef.current
+    setDiscardingApprovalId(approvalEdit.id)
+    try {
+      if (proposal?.id === approvalEdit.id) {
+        await botJson(`/admin/approvals/${proposal.id}/edit-preview/${encodeURIComponent(proposal.token)}/discard`, 'POST')
+        if (proposalRef.current?.token === proposal.token) { proposalRef.current = null; setApprovalProposal(null) }
+      }
+      if (activeConversationRef.current === selected.id) {
+        setApprovalEdit(null)
+        setAiEditPrompt('')
+        setAiPromptApprovalId(null)
+        setActionStatus('Правка отклонена. Исходный ответ сохранён, клиенту ничего не отправлено.')
+      }
+    } catch (error) {
+      if (activeConversationRef.current === selected.id) setActionStatus(error instanceof Error ? error.message : 'Не удалось отклонить правку. Повторите действие.')
+    } finally { setDiscardingApprovalId(null) }
   }
 
   const dialogTags = useMemo(() => Array.from(new Map(convs.flatMap(item => item.meta?.tags ?? []).map(tag => [tag.id, tag])).values()), [convs])
@@ -668,7 +796,8 @@ export default function DialogsPage() {
         {!selected ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-2" style={{ color: '#b3bcc5' }}>
             <Bot size={36} />
-            <p className="text-sm">Выберите диалог слева</p>
+            <p className="text-sm" role="status">{linkState === 'loading' ? 'Открываем диалог…' : linkState === 'error' ? 'Не удалось открыть диалог по ссылке' : 'Выберите диалог слева'}</p>
+            {linkState === 'error' && <button type="button" onClick={() => setLinkRetry(value => value + 1)} className="rounded-lg bg-[#eef5f9] px-3 py-2 text-xs font-semibold text-[#0c4d6c]">Повторить</button>}
           </div>
         ) : (
           <>
@@ -715,10 +844,10 @@ export default function DialogsPage() {
                 <span>{generationStatus}</span>
                 {!generatingReply && <button onClick={() => setGenerationStatus(null)} className="ml-auto text-violet-700" aria-label="Закрыть">×</button>}
               </div>}
-              {actionStatus && <div className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-800">
-                {(decidingApprovalId || aiEditingId) && <LoaderCircle size={14} className="animate-spin shrink-0" />}
+              {actionStatus && <div role="status" className="flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-800">
+                {(decidingApprovalId || aiEditingId || discardingApprovalId) && <LoaderCircle size={14} className="animate-spin shrink-0" />}
                 <span>{actionStatus}</span>
-                {!decidingApprovalId && !aiEditingId && <button onClick={() => setActionStatus(null)} className="ml-auto" aria-label="Закрыть">×</button>}
+                {!decidingApprovalId && !aiEditingId && !discardingApprovalId && <button onClick={() => setActionStatus(null)} className="ml-auto" aria-label="Закрыть">×</button>}
               </div>}
               {chatLoading && <p className="text-sm text-center" style={{ color: '#8a97a5' }}>Загрузка чата...</p>}
               {!chatLoading && chat?.messages.length === 0 && (
@@ -731,11 +860,13 @@ export default function DialogsPage() {
                 const actorName = isManager ? (m.author_name || 'Менеджер') : isBot ? (m.author_name || 'ИИ бот') : 'Клиент'
                 const actorColor = isManager ? employeeColor(actorName) : isBot ? BOT_COLOR : '#64748b'
                 const pending = m.status === 'pending_review' && !!m.approval_id
+                const editing = pending && approvalEdit && approvalEdit.id === m.approval_id ? approvalEdit : null
+                const approvalBusy = decidingApprovalId !== null || aiEditingId !== null || discardingApprovalId !== null || Boolean(dictationTarget) || Boolean(transcribingTarget)
                 const media = mediaHref(m)
                 const isVoice = /voice|audio|голосов/i.test(m.message_type || m.text)
                 const isImage = /image|photo|picture|фото/i.test(m.message_type || m.text)
                 const mediaLabel = isVoice ? 'Голосовое сообщение' : isImage ? 'Изображение' : null
-                const messageParts = displayParts(m.text)
+                const messageParts = displayParts(editing ? editing.original : m.text)
                 return (
                   <div key={m.id} className={`flex flex-col max-w-[80%] ${isClient ? 'items-start self-start' : 'items-end self-end'}`}>
                     <div className="flex items-center gap-1.5 text-[10px] mb-0.5" style={{ color: actorColor }}>
@@ -763,33 +894,67 @@ export default function DialogsPage() {
                     {pending ? (
                       <div className="mt-2 flex w-full flex-wrap items-center justify-end gap-1.5">
                         <span className="mr-auto text-[10px] font-semibold text-amber-600">Ожидает подтверждения</span>
-                        <div className="flex w-full gap-1.5">
-                          <input
-                            value={aiPromptApprovalId === m.approval_id ? aiEditPrompt : ''}
-                            onChange={event => { setAiPromptApprovalId(m.approval_id!); setAiEditPrompt(event.target.value) }}
-                            onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void editApprovalWithAi(m) } }}
-                            placeholder="Как улучшить ответ?"
-                            className="min-w-0 flex-1 rounded-lg border border-[#cbd5e1] bg-white px-2 py-1 text-[11px] text-[#0c2136] outline-none"
-                          />
-                          {dictationButton(`approval:${m.approval_id}`, 'Надиктовать пожелание для ИИ')}
-                          <button
-                            onClick={() => void editApprovalWithAi(m)}
-                            disabled={!aiEditPrompt.trim() || aiEditingId !== null || decidingApprovalId !== null}
-                            className="rounded-lg bg-[#e0e7ff] px-2 py-1 text-[11px] font-semibold text-[#3730a3] disabled:opacity-50"
-                          >{aiEditingId === m.approval_id ? <span className="inline-flex items-center gap-1"><LoaderCircle size={11} className="animate-spin" /> Улучшаю…</span> : 'ИИ улучшить'}</button>
-                        </div>
+                        {editing && <div className="w-full min-w-0 space-y-2 rounded-xl border border-[#dbe8ee] bg-white p-2.5">
+                          <label className="block text-[11px] font-semibold text-[#0c4d6c]">
+                            {approvalProposal?.id === editing.id ? 'Правка готова к подтверждению' : 'Предлагаемый ответ'}
+                            <textarea
+                              rows={5}
+                              value={editing.text}
+                              onChange={event => { invalidateProposal(); setApprovalEdit({ ...editing, text: event.target.value }) }}
+                              disabled={approvalBusy}
+                              maxLength={10000}
+                              className="mt-1 w-full resize-y rounded-lg border border-[#cbd5e1] p-2 text-sm font-normal text-[#0c2136] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1784a6]/40 disabled:opacity-60"
+                            />
+                          </label>
+                          <label className="block text-[11px] font-semibold text-[#0c4d6c]">
+                            Инструкция для ИИ
+                            <input
+                              value={aiPromptApprovalId === m.approval_id ? aiEditPrompt : ''}
+                              onChange={event => { setAiPromptApprovalId(m.approval_id!); setAiEditPrompt(event.target.value) }}
+                              onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void editApprovalWithAi(m) } }}
+                              disabled={approvalBusy}
+                              maxLength={2000}
+                              placeholder="Напишите или надиктуйте, что изменить"
+                              className="mt-1 w-full min-w-0 rounded-lg border border-[#cbd5e1] px-2 py-2 text-xs font-normal text-[#0c2136] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1784a6]/40 disabled:opacity-60"
+                            />
+                          </label>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {dictationButton(`approval:${m.approval_id}`, 'Надиктовать инструкцию для ИИ')}
+                            <button
+                              type="button"
+                              onClick={() => void editApprovalWithAi(m)}
+                              disabled={aiPromptApprovalId !== m.approval_id || !aiEditPrompt.trim() || !editing.text.trim() || approvalBusy}
+                              className="min-h-8 rounded-lg bg-[#e0e7ff] px-2 py-1 text-[11px] font-semibold text-[#3730a3] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/40 disabled:opacity-50"
+                            >{aiEditingId === m.approval_id ? <span className="inline-flex items-center gap-1"><LoaderCircle size={11} className="animate-spin" /> Готовлю…</span> : 'Предложить правку'}</button>
+                            <button
+                              type="button"
+                              onClick={() => void discardApprovalEdit()}
+                              disabled={approvalBusy}
+                              className="min-h-8 rounded-lg border border-[#dbe8ee] px-2 py-1 text-[11px] font-semibold text-[#0c4d6c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1784a6]/40 disabled:opacity-50"
+                            >{discardingApprovalId === m.approval_id ? 'Отклоняем правку…' : 'Отклонить правку'}</button>
+                            <span className="text-[10px] text-[#617786]">Отправка — после подтверждения ниже</span>
+                          </div>
+                        </div>}
+                        {!editing && <button
+                          type="button"
+                          onClick={() => { invalidateProposal(); setApprovalEdit({ id: m.approval_id!, original: m.text, text: m.text }); setAiPromptApprovalId(m.approval_id!); setAiEditPrompt('') }}
+                          disabled={approvalBusy}
+                          className="min-h-8 rounded-lg border border-[#dbe8ee] bg-white px-2 py-1 text-[11px] font-semibold text-[#0c4d6c] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1784a6]/40 disabled:opacity-50"
+                        >Редактировать</button>}
                         <button
+                          type="button"
                           onClick={() => void decideApproval(m, 'reject')}
-                          disabled={decidingApprovalId !== null || aiEditingId !== null}
-                          className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 disabled:opacity-50"
+                          disabled={approvalBusy}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-[11px] font-semibold text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 disabled:opacity-50"
                         >
                           {decidingApprovalId === m.approval_id && decisionKind === 'reject' ? <LoaderCircle size={11} className="animate-spin" /> : <X size={11} />}
-                          {decidingApprovalId === m.approval_id && decisionKind === 'reject' ? 'Отменяем…' : 'Отменить'}
+                          {decidingApprovalId === m.approval_id && decisionKind === 'reject' ? 'Отклоняем…' : 'Отклонить черновик'}
                         </button>
                         <button
+                          type="button"
                           onClick={() => void decideApproval(m, 'approve')}
-                          disabled={decidingApprovalId !== null || aiEditingId !== null}
-                          className="inline-flex items-center gap-1 rounded-lg bg-[#0c4d6c] px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                          disabled={approvalBusy || !(editing ? editing.text : m.text).trim()}
+                          className="inline-flex min-h-8 items-center gap-1 rounded-lg bg-[#0c4d6c] px-2 py-1 text-[11px] font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#1784a6]/40 disabled:opacity-50"
                         >
                           {decidingApprovalId === m.approval_id && decisionKind === 'approve' ? <LoaderCircle size={11} className="animate-spin" /> : <Check size={11} />}
                           {decidingApprovalId === m.approval_id && decisionKind === 'approve' ? 'Отправляем…' : 'Подтвердить и отправить'}
@@ -809,11 +974,17 @@ export default function DialogsPage() {
               <div ref={bottomRef} />
             </div>
 
+            {recordedVoice && <div className="flex flex-wrap items-center gap-2 border-t border-[#ebebee] px-3 pt-3">
+              <span className="text-xs font-semibold text-[#0c4d6c]">Голосовое перед отправкой</span>
+              {recordedVoiceUrl && <audio controls src={recordedVoiceUrl} className="h-9 max-w-full" />}
+              <button type="button" onClick={() => setRecordedVoice(null)} disabled={sending} className="min-h-8 rounded-lg border border-red-200 px-2 text-xs font-semibold text-red-700 disabled:opacity-50">Удалить запись</button>
+              <button type="button" onClick={() => void sendMedia(recordedVoice)} disabled={sending || recording} className="min-h-8 rounded-lg bg-[#0c4d6c] px-3 text-xs font-semibold text-white disabled:opacity-50">{sending ? 'Отправляем…' : 'Отправить голосовое'}</button>
+            </div>}
             <div className="flex gap-2 p-3 flex-shrink-0" style={{ borderTop: '1px solid #ebebee' }}>
               <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) void sendMedia(file) }} />
               <div className="flex flex-col justify-end gap-1.5">
                 <button onClick={() => fileRef.current?.click()} disabled={sending} title="Отправить фото" className="grid h-9 w-9 place-items-center rounded-xl bg-[#eef5f9] text-[#0c4d6c] disabled:opacity-50"><ImagePlus size={16} /></button>
-                <button onClick={() => void toggleRecording()} disabled={sending} title={recording ? 'Остановить и отправить' : 'Записать и отправить голосовое клиенту'} className={`grid h-9 w-9 place-items-center rounded-xl disabled:opacity-50 ${recording ? 'animate-pulse bg-red-100 text-red-700' : 'bg-[#eef5f9] text-[#0c4d6c]'}`}>{recording ? <Square size={14} /> : <Mic size={16} />}</button>
+                <button onClick={() => void toggleRecording()} disabled={sending || Boolean(recordedVoice) || Boolean(dictationTarget) || Boolean(transcribingTarget)} title={recording ? 'Остановить и прослушать' : 'Записать голосовое клиенту'} aria-label={recording ? 'Остановить и прослушать' : 'Записать голосовое клиенту'} className={`grid h-9 w-9 place-items-center rounded-xl disabled:opacity-50 ${recording ? 'animate-pulse bg-red-100 text-red-700' : 'bg-[#eef5f9] text-[#0c4d6c]'}`}>{recording ? <Square size={14} /> : <Mic size={16} />}</button>
               </div>
               <div className="relative flex-1">
                 <textarea
