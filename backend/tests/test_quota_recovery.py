@@ -50,6 +50,9 @@ def test_wrapped_quota_alert_is_deduplicated(flow, monkeypatch):
 
 @pytest.mark.parametrize("utility", ["extract_fields", "summarize_dialogue", "detect_and_translate"])
 def test_utility_failure_creates_recovery_marker_without_night_or_new_inbound(flow, utility):
+    if utility == "summarize_dialogue":
+        incoming(flow, identifier="context-1", text="Предыдущий учебный вопрос")
+        flow.day = "2026-10-21T12:00:01"
     incoming(flow)
     failing = getattr(pipeline, utility)
     failing.side_effect = retry_error(RuntimeError("all configured fallbacks failed"))
@@ -150,7 +153,8 @@ def test_checker_receives_current_trusted_business_instructions(flow, prompt, me
     process(flow)
     expected = "\n\n".join(value for value in (prompt, memory) if value)
     assert pipeline.verify_reply.call_count == 1
-    assert pipeline.verify_reply.call_args.kwargs == {"business_instructions": expected}
+    assert pipeline.verify_reply.call_args.kwargs["business_instructions"] == expected
+    assert pipeline.verify_reply.call_args.kwargs["slot_context"] == pipeline.generate_reply.call_args.args[1]
     assert "09:00" not in pipeline.verify_reply.call_args.kwargs["business_instructions"]
     assert len(flow.cards) == 1
     assert flow.sent == []

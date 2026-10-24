@@ -221,9 +221,19 @@ _CLOSING_ACK_RE = re.compile(
 )
 
 
-def _is_closing_acknowledgement(text: str) -> bool:
+def _is_closing_acknowledgement(text: str, previous_reply: str | None = None) -> bool:
     """True only for a short acknowledgement that contains no new request."""
-    return bool(_CLOSING_ACK_RE.fullmatch(str(text or "").strip()))
+    value = str(text or "").strip()
+    if _CLOSING_ACK_RE.fullmatch(value):
+        return True
+    # A short agreement can answer a real question. Only close it when the
+    # previous outgoing statement did not ask the client anything.
+    if previous_reply is None or "?" in previous_reply:
+        return False
+    return bool(re.fullmatch(
+        r"(?:(?:хорошо|ладно|ок(?:ей)?|ok(?:ay)?|понял[аи]?|ясно|вс[её]\s+понятно|макул|жакшы|ооба|оба)[\s.!,🙏👍👌🙂😊✅]*|[👍👌🙏✅❤️♥️]+)",
+        value, re.IGNORECASE,
+    ))
 
 
 def move_lead_status(db, lead: Lead, status_id: int | None, reason: str) -> None:
@@ -741,9 +751,16 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
         combined_text = " ".join(item.text for item in usable_buffers).strip()
         conversation_id = active_buffers[-1].conversation_id
 
-        if _is_closing_acknowledgement(combined_text) and any(
-            item.get("role") == "assistant" for item in remote_history
-        ):
+        previous_reply = next((str(item.get("content") or "") for item in reversed(remote_history)
+                               if item.get("role") == "assistant"), None)
+        if previous_reply is None:
+            previous_reply = db.scalar(select(Message.text).where(
+                Message.lead_id == lead.id,
+                Message.role.in_(['assistant', 'manager']),
+                Message.direction == 'outgoing',
+                Message.status.in_(['sent', 'delivered', 'read']),
+            ).order_by(Message.created_at.desc(), Message.id.desc()).limit(1))
+        if _is_closing_acknowledgement(combined_text, previous_reply=previous_reply) and previous_reply is not None:
             _mark_buffers_processed(db, buffers)
             log_action(
                 db,
@@ -798,7 +815,13 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
             and abs((item["created_at"] - active_buffers[-1].timestamp).total_seconds()) <= 2
             for item in remote_history
         )
-        if combined_text and not triggering_is_remote:
+        local_message_ids = {str(message.message_id) for message in all_messages if message.role == 'user'}
+        triggering_is_local = not remote_history and (
+            all(str(item.message_id) in local_message_ids for item in usable_buffers)
+            or (full_dialogue and full_dialogue[-1].get('role') == 'user'
+                and str(full_dialogue[-1].get('content') or '').strip() == combined_text)
+        )
+        if combined_text and not triggering_is_remote and not triggering_is_local:
             full_dialogue.append({"role": "user", "content": combined_text})
 
         # last 30 messages for reply generation
@@ -1069,6 +1092,7 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
         # Self-check pass: fix repeats, extra questions, premature consult offers
         reply, _check_usage = (reply, None) if plus_request else verify_reply(
             dialogue, reply,
+            slot_context=slot_context,
             business_instructions="\n\n".join(value for value in (
                 custom_prompt.value if custom_prompt else None,
                 bot_memory.value if bot_memory else None,
@@ -1124,6 +1148,8 @@ def process_lead_buffer(lead_pk: int, triggering_message_id: str) -> None:
             if hypervisor_usage:
                 save_ai_usage(db, lead.id, hypervisor_usage)
             translations = detect_and_translate(combined_text, reply)
+            if _manager_took_over(db, lead, buffers):
+                return
             extra_managers = _load_extra_manager_ids(db)
             approval = ApprovalRequest(
                 lead_id=lead.id,
