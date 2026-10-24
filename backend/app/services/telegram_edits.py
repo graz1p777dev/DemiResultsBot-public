@@ -95,7 +95,10 @@ def _voice_text(voice):
                 if size > 20*1024*1024:
                     raise ValueError('Telegram voice exceeds download limit')
                 chunks.append(chunk)
-    return transcribe_audio_bytes(b''.join(chunks), 'telegram.ogg')
+    filename = path.rsplit('/', 1)[-1]
+    if filename.endswith('.oga'):
+        filename = filename[:-4] + '.ogg'
+    return transcribe_audio_bytes(b''.join(chunks), filename)
 
 
 def _link(chat, mid):
@@ -103,7 +106,10 @@ def _link(chat, mid):
         return f'https://t.me/c/{chat[4:]}/{mid}'
     # Private message jump support depends on the Telegram client; the preview
     # also replies to the instruction, so its built-in reply always remains.
-    return f'tg://openmessage?user_id={chat}&message_id={mid}'
+    peer = settings.telegram_bot_token.split(':', 1)[0]
+    if not peer.isdigit():
+        peer = chat
+    return f'tg://openmessage?user_id={peer}&message_id={mid}'
 
 
 def prepare_reply(db, message, actor, chat):

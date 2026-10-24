@@ -12,12 +12,12 @@ _VOICE_RE = re.compile(r'\[(?:voice|audio)\]\s*(https?://\S+)')
 
 def _html_excerpt(text: str, limit: int = 1700) -> str:
     """Bound an escaped preview without cutting through an HTML entity."""
-    if len(escape(text)) <= limit:
+    if len(escape(text).encode('utf-16-le')) // 2 <= limit:
         return escape(text)
     low, high = 0, len(text)
     while low < high:
         mid = (low + high + 1) // 2
-        if len(escape(text[:mid])) <= limit - 1:
+        if len(escape(text[:mid]).encode('utf-16-le')) // 2 <= limit - 1:
             low = mid
         else:
             high = mid - 1

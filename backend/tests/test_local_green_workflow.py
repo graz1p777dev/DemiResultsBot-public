@@ -67,6 +67,7 @@ def flow(tmp_path):
             (settings, "telegram_webhook_secret", "local-telegram-secret"),
             (settings, "telegram_manager_chat_id", "111"),
             (settings, "telegram_allowed_manager_ids", "111"),
+            (settings, "telegram_bot_token", "local-telegram-token"),
             (pipeline.crm_notify, "send_channel_message", Mock(side_effect=provider)),
             (pipeline.crm_notify, "notify", Mock()), (pipeline.crm_notify, "sync_deal", Mock()),
             (pipeline, "move_lead_status", Mock()), (pipeline, "_lead_stage_snapshot", Mock(return_value={})),
@@ -81,7 +82,7 @@ def flow(tmp_path):
             (pipeline, "_maybe_calibrate_prompt", Mock()),
             (pipeline.telegram, "send_approval_card", Mock(side_effect=card)),
             (pipeline.telegram, "edit_approval_card", Mock(return_value={"ok": True})),
-            (pipeline.telegram, "send_text", Mock(return_value={"ok": True})),
+            (pipeline.telegram, "send_text", Mock(return_value={"ok": True, "result": {"message_id": 333}})),
             (pipeline.telegram, "answer_callback", Mock(return_value={"ok": True})),
             (admin.process_lead_buffer, "apply_async", Mock()),
         ]:

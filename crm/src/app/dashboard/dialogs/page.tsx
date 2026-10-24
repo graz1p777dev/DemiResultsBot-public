@@ -325,7 +325,7 @@ export default function DialogsPage() {
     void resolve().catch(() => { if (!cancelled) setLinkState('error') })
     return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [requestedLead, requestedClient, requestedConversation, convs, loading, linkRetry])
+  }, [requestedLead, requestedClient, requestedConversation, loading, linkRetry])
 
   useEffect(() => { bottomRef.current?.scrollIntoView() }, [chat])
 
@@ -611,6 +611,8 @@ export default function DialogsPage() {
           proposalRef.current = proposal
           setApprovalProposal(proposal)
         }
+        // Accept owns this token now; switching chats must not discard it.
+        if (proposalRef.current?.token === proposal.token) { proposalRef.current = null; setApprovalProposal(null) }
         await botJson(`/admin/approvals/${proposal.id}/edit-preview/${encodeURIComponent(proposal.token)}/accept`, 'POST')
         if (proposalRef.current?.token === proposal.token) { proposalRef.current = null; setApprovalProposal(null) }
       } else {

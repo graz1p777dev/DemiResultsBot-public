@@ -26,6 +26,37 @@ def functions(path, names, scope):
 
 
 class TelegramSafetyTest(TestCase):
+    def test_purchase_keyboard_cannot_accept_empty_or_placeholder_reply(self):
+        scope = {"ApprovalRequest": object, "Lead": object, "PURCHASE_PLACEHOLDER": "[answer]",
+                 "crm_chat_url": lambda lead: "https://example.invalid/dashboard/dialogs?lead=42",
+                 "_has_amocrm_link": lambda lead: False}
+        functions("services/telegram.py", {"approval_keyboard", "_has_sendable_purchase_reply"}, scope)
+        for reply, sendable in [(None, False), ("", False), ("   ", False),
+                                ("Заполните [answer]", False), ("Проверенный ответ", True)]:
+            with self.subTest(reply=reply):
+                has_reply = scope["_has_sendable_purchase_reply"](NS(edited_reply=reply))
+                self.assertEqual(has_reply, sendable)
+                rows = scope["approval_keyboard"](42, NS(), is_purchase=True, has_edited=has_reply)["inline_keyboard"]
+                actions = {button["callback_data"] for row in rows for button in row if "callback_data" in button}
+                self.assertEqual(actions, {"edit:42", "reject:42"} | ({"approve:42"} if sendable else set()))
+
+    def test_two_emoji_only_fields_fit_telegram_utf16_limit(self):
+        scope = {"ApprovalRequest": object, "Lead": object, "escape": escape,
+                 "test_banner": lambda lead: "", "PURCHASE_PLACEHOLDER": "[answer]",
+                 "_PICTURE_RE": re.compile(r"^\[picture\]\s+(\S+)"),
+                 "_VOICE_RE": re.compile(r"^\[voice\]\s+(\S+)"),
+                 "split_outgoing_messages": lambda reply: [reply]}
+        functions("services/telegram.py", {"_html_excerpt", "_fmt_client_message",
+                  "_format_reply_preview", "_approval_card_text", "approval_card", "_purchase_card"}, scope)
+        for purchase in (False, True):
+            with self.subTest(purchase=purchase):
+                approval = NS(extracted_fields={"_purchase_intent": purchase},
+                              client_message="😀" * 2000, ai_reply="🚀" * 2000, edited_reply=None)
+                card = scope["approval_card"](approval, NS())
+                self.assertIn("😀", card)
+                self.assertIn("🚀", card)
+                self.assertLessEqual(len(card.encode("utf-16-le")) // 2, 4096)
+
     def test_decision_actor_escaped_in_regular_and_purchase_cards(self):
         scope = {
             "ApprovalRequest": object, "Lead": object, "escape": escape,
@@ -38,7 +69,7 @@ class TelegramSafetyTest(TestCase):
             "is_test_lead": lambda lead: False, "lead_url": lambda lead: "https://example.invalid/lead",
             "PURCHASE_PLACEHOLDER": "draft",
         }
-        functions("services/telegram.py", {"approval_card", "_purchase_card"}, scope)
+        functions("services/telegram.py", {"approval_card", "_purchase_card", "_approval_card_text", "_html_excerpt"}, scope)
         lead = NS(client=None, contact_id="-", amocrm_lead_id="42")
         actor = '<b>A&B</b> "Name"'
         decision = "✅ Отправлено · " + actor
@@ -53,7 +84,7 @@ class TelegramSafetyTest(TestCase):
                 self.assertIn(escape(actor), card)
                 self.assertNotIn(actor, card)
                 self.assertNotIn("&amp;lt;b&amp;gt;", card)
-                self.assertIn("<b>Клиент:</b>", card)
+                self.assertIn("<b>Сообщение клиента:</b>", card)
 
     def telegram(self, responses=()):
         client = MagicMock()
@@ -68,8 +99,11 @@ class TelegramSafetyTest(TestCase):
             "_log": Mock(), "_forward_client_photos": Mock(), "_forward_client_voice": Mock(),
             "_parse_message_ids": lambda value: [("7", "10")], "is_test_lead": lambda lead: False,
             "lead_url": lambda lead: "https://example.invalid/lead",
+            "crm_chat_url": lambda lead: "https://example.invalid/dashboard/dialogs?lead=42",
+            "_has_amocrm_link": lambda lead: False,
+            "PURCHASE_PLACEHOLDER": "[answer]",
         }
-        functions("services/telegram.py", {"allowed_manager_ids", "is_authorized_manager", "send_approval_card", "edit_approval_card"}, scope)
+        functions("services/telegram.py", {"allowed_manager_ids", "is_authorized_manager", "send_approval_card", "edit_approval_card", "_has_sendable_purchase_reply"}, scope)
         return scope, client
 
     def test_personal_authorization(self):

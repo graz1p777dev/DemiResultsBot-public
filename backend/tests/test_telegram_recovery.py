@@ -15,10 +15,10 @@ URL = "/webhooks/telegram/local-telegram-secret"
 
 def callback(update_id, action, approval_id, actor=111):
     return {"update_id": update_id, "callback_query": {"id": str(update_id), "from": {"id": actor},
-        "message": {"chat": {"id": actor}}, "data": f"{action}:{approval_id}"}}
+        "message": {"message_id": 222, "chat": {"id": actor}}, "data": f"{action}:{approval_id}"}}
 
 
-def test_duplicate_edit_update_does_not_reopen_consumed_session(flow):
+def test_duplicate_edit_update_does_not_reopen_consumed_proposal(flow):
     incoming(flow)
     process(flow)
     with flow.sessions() as db:
@@ -26,14 +26,26 @@ def test_duplicate_edit_update_does_not_reopen_consumed_session(flow):
     payload = callback(10, "edit", approval_id)
     assert flow.client.post(URL, json=payload).json()["ok"]
     message = {"update_id": 11, "message": {"message_id": 12, "from": {"id": 111},
-        "chat": {"id": 111}, "text": "Исправление сотрудника"}}
-    assert flow.client.post(URL, json=message).json()["ok"]
+        "chat": {"id": 111}, "text": "Исправление сотрудника",
+        "reply_to_message": {"message_id": 333}}}
+    assert flow.client.post(URL, json=message).json()["action"] == "edit_preview"
+    with flow.sessions() as db:
+        proposal = db.scalar(select(Setting).where(Setting.key.like("telegram_edit_proposal:%")))
+        token = proposal.key.split(":", 1)[1]
+        assert db.get(ApprovalRequest, approval_id).edited_reply is None
+    assert not flow.sent
+    assert flow.client.post(URL, json=callback(12, "edit_accept", token)).json()["ok"]
+    prompts_sent = pipeline.telegram.send_text.call_count
     assert flow.client.post(URL, json=payload).json()["duplicate"]
     assert flow.client.post(URL, json=message).json()["duplicate"]
+    assert not flow.client.post(URL, json=callback(13, "edit_accept", token)).json()["ok"]
+    assert pipeline.telegram.send_text.call_count == prompts_sent
     with flow.sessions() as db:
         assert pipeline.pop_edit_session(db, "111") is None
         assert db.get(ApprovalRequest, approval_id).edited_reply == "Исправление сотрудника"
-    assert not flow.sent
+        assert db.scalar(select(Setting).where(Setting.key.like("telegram_edit_proposal:%"))) is None
+    assert len(flow.sent) == 1
+    assert flow.sent[0][-1] == "Исправление сотрудника"
 
 
 def test_update_conflict_and_malformed_id_fail_without_side_effects(flow):

@@ -66,11 +66,16 @@ class DictationTest(TestCase):
         client = SimpleNamespace(audio=SimpleNamespace(transcriptions=Transcriptions()))
         with (
             patch.object(openai_service.settings, "openai_api_key", "test-key"),
+            patch.object(openai_service.settings, "openai_asr_api_key", ""),
+            patch.object(openai_service.settings, "openai_asr_model", "gpt-transcribe"),
             patch.object(openai_service, "_client", return_value=client),
         ):
             text = openai_service.transcribe_audio_bytes(b"voice", "dictation.webm")
 
         self.assertEqual(text, "Текст сотрудника")
-        self.assertEqual(calls["model"], "gpt-4o-mini-transcribe")
+        self.assertEqual(calls["model"], "gpt-transcribe")
         self.assertEqual(calls["file"].name, "dictation.webm")
+        self.assertEqual(calls["file"].getvalue(), b"voice")
+        self.assertEqual(calls["response_format"], "json")
+        self.assertNotIn("language", calls)
 
